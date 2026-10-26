@@ -67,6 +67,7 @@ CTrade   trade;
 int      hAtr1 = INVALID_HANDLE;
 datetime lastBar = 0;
 datetime lastSetup[2];
+long cCalls=0, cZones=0, cH1Zones=0, cTap=0, cSwing=0, cChoch=0, cOb=0, cTouch=0, cStop=0, cEntry=0, cNoBars=0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -85,6 +86,8 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   PrintFormat("FUNNEL calls=%d noBars=%d barsWithZone=%d zonesTotal=%d tap=%d swing=%d choch=%d ob=%d touch=%d stopOk=%d entries=%d",
+               (int)cCalls, (int)cNoBars, (int)cH1Zones, (int)cZones, (int)cTap, (int)cSwing, (int)cChoch, (int)cOb, (int)cTouch, (int)cStop, (int)cEntry);
    if(hAtr1 != INVALID_HANDLE) IndicatorRelease(hAtr1);
 }
 
@@ -254,24 +257,28 @@ bool TryEntry(const int dir, const Zone &z, const SBar &m5[], const int n5)
    }
    if(L < 0) return false;
    if(!(lowest <= z.rhi) || !(lowest > z.lo)) return false;
+   cTap++;
 
    // 2. last lower high before the tap low
    int sh = -1;
    for(int s2 = L + 1; s2 <= L + InpChochBars; s2++)
       if(IsSwingHigh(m5, s2, n5)) { sh = s2; break; }
    if(sh < 0) return false;
+   cSwing++;
 
    // 3. change of character: first close above it after the tap low
    int c = -1;
    for(int s3 = L - 1; s3 >= 1; s3--)
       if(m5[s3].c > m5[sh].h) { c = s3; break; }
    if(c < 2) return false;
+   cChoch++;
 
    // 4. M5 order block: last bearish candle before the break
    int ob = -1;
    for(int s4 = c + 1; s4 <= L; s4++)
       if(m5[s4].c < m5[s4].o) { ob = s4; break; }
    if(ob < 0) return false;
+   cOb++;
    double obHi = m5[ob].h, obLo = m5[ob].l;
 
    // 5. first pullback into the OB happened on the last closed bar and it held
@@ -279,6 +286,7 @@ bool TryEntry(const int dir, const Zone &z, const SBar &m5[], const int n5)
    for(int s5 = 2; s5 < c; s5++)
       if(m5[s5].l <= obHi) return false;
 
+   cTouch++;
    int di = (dir > 0) ? 0 : 1;
    if(lastSetup[di] == m5[c].t) return false;
    lastSetup[di] = m5[c].t;
@@ -294,6 +302,7 @@ bool TryEntry(const int dir, const Zone &z, const SBar &m5[], const int n5)
    double minLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    if(dist < InpMinStop || dist > InpMaxStop || dist <= minLevel) return false;
 
+   cStop++;
    double lots = CalcLots(dist);
    if(lots <= 0) return false;
    double tp = e + InpRR * dist;
@@ -303,6 +312,7 @@ bool TryEntry(const int dir, const Zone &z, const SBar &m5[], const int n5)
    bool ok;
    if(dir > 0) ok = trade.Buy(lots, _Symbol, 0.0, slReal, tpReal, "SMC");
    else        ok = trade.Sell(lots, _Symbol, 0.0, slReal, tpReal, "SMC");
+   if(ok) cEntry++;
    return ok;
 }
 
@@ -312,7 +322,8 @@ bool TryDir(const int dir)
    int n1 = LoadBars(PERIOD_H1, InpH1Bars, dir, h1);
    int need5 = InpTapWindow + InpChochBars + 20;
    int n5 = LoadBars(PERIOD_M5, need5, dir, m5);
-   if(n1 < InpH1Bars / 2 || n5 < need5 - 5) return false;
+   cCalls++;
+   if(n1 < InpH1Bars / 2 || n5 < need5 - 5) { cNoBars++; return false; }
 
    double a[];
    ArraySetAsSeries(a, true);
@@ -322,6 +333,8 @@ bool TryDir(const int dir)
    Zone zs[];
    int nz = FindZones(h1, n1, atr, zs);
    if(nz == 0) return false;
+   cH1Zones++;
+   cZones += nz;
 
    int n30 = 0, n15 = 0;
    if(InpUseM30) n30 = LoadBars(PERIOD_M30, InpH1Bars * 2 + 10, dir, m30);

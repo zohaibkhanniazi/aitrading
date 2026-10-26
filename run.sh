@@ -49,6 +49,8 @@ run_one() {  # $1 = ini path
   mkdir -p "$REPO/reports"
   cp "$MT5DIR/$REP"*.png "$REPO/reports/" 2>/dev/null; cp "$MT5DIR/$REP"*.png "$OUT/" 2>/dev/null
   cp "$REPORT" "$REPO/reports/$REP.htm"; cp "$REPORT" "$OUT/$REP.htm"
+  local TL; TL=$(ls -t "$MT5DIR"/Tester/Agent-*/logs/*.log 2>/dev/null | head -1)
+  [ -n "$TL" ] && { iconv -f UTF-16 -t UTF-8 "$TL" 2>/dev/null | grep -E "FUNNEL|error|failed|invalid|zero|not enough" | tail -20 > "$OUT/tester_$REP.txt"; cp "$TL" "$OUT/tester_$REP.raw.log" 2>/dev/null; }
   echo "===== RESULT: $REP ====="
   python3 "$REPO/tools/summarize.py" "$REPO/reports/$REP.htm" | tee "$OUT/summary_$REP.txt"
   python3 "$REPO/tools/log_result.py" "$REPO/reports/$REP.htm" "$STRAT" "$REP" "$OUT/results.csv" && python3 "$REPO/tools/report.py" "$OUT/results.csv" "$OUT/leaderboard.html" >/dev/null
