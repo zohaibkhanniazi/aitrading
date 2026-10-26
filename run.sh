@@ -21,10 +21,10 @@ echo "== 1/4 git pull"; git -C "$REPO" pull --ff-only || exit 1
 
 SRC=$(ls "$REPO/strategies/$STRAT/"*.mq5 2>/dev/null | head -1)
 [ -n "$SRC" ] || { echo "No .mq5 in strategies/$STRAT"; exit 1; }
-WIN_SRC="C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\aitrading\\strategies\\$STRAT\\$(basename "$SRC")"
+WIN_SRC="MQL5\\Experts\\aitrading\\strategies\\$STRAT\\$(basename "$SRC")"
 
 echo "== 2/4 compile"
-"$WINE" "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe" /compile:"$WIN_SRC" /log 2>&1 | tail -5
+(cd "$MT5DIR" && "$WINE" metaeditor64.exe "/compile:$WIN_SRC" /log) 2>&1 | tail -5
 LOG="${SRC%.mq5}.log"
 [ -f "$LOG" ] && iconv -f UTF-16 -t UTF-8 "$LOG" 2>/dev/null | tail -3
 EX5="${SRC%.mq5}.ex5"
@@ -33,7 +33,7 @@ EX5="${SRC%.mq5}.ex5"
 echo "== 3/4 backtest (may take a few minutes)"
 cp "$REPO/strategies/$STRAT/tester.ini" "$MT5DIR/tester_$STRAT.ini"
 touch "$MT5DIR/.start"
-"$WINE" "C:\\Program Files\\MetaTrader 5\\terminal64.exe" /config:"C:\\Program Files\\MetaTrader 5\\tester_$STRAT.ini"
+(cd "$MT5DIR" && "$WINE" terminal64.exe "/config:tester_$STRAT.ini")
 
 echo "== 4/4 report"
 REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
