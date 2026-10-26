@@ -3,6 +3,8 @@
 # Usage: ./run.sh <strategy_folder_name>     e.g. ./run.sh bullish_engulfing
 # MetaTrader 5 must be CLOSED before running (the tester launches its own copy).
 set -u
+OUT="$HOME/Documents/aitrading-reports"; mkdir -p "$OUT"
+exec > >(tee "$OUT/last_run.txt") 2>&1
 STRAT="${1:-bullish_engulfing}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 
@@ -28,7 +30,7 @@ echo "== 2/4 compile"
 LOG="${SRC%.mq5}.log"
 [ -f "$LOG" ] && iconv -f UTF-16 -t UTF-8 "$LOG" 2>/dev/null | tail -3
 EX5="${SRC%.mq5}.ex5"
-[ "$EX5" -nt "$SRC" ] || { echo "Compile failed - see $LOG"; exit 1; }
+[ "$EX5" -nt "$SRC" ] || { echo "Compile failed - see $LOG"; [ -f "$LOG" ] && cp "$LOG" "$OUT/compile.log"; exit 1; }
 
 echo "== 3/4 backtest (may take a few minutes)"
 cp "$REPO/strategies/$STRAT/tester.ini" "$MT5DIR/tester_$STRAT.ini"
@@ -38,7 +40,7 @@ touch "$MT5DIR/.start"
 echo "== 4/4 report"
 REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
 if [ -n "$REPORT" ]; then
-  mkdir -p "$REPO/reports"; cp "$REPORT" "$REPO/reports/$STRAT.htm"
+  mkdir -p "$REPO/reports"; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"
   echo "Report: $REPO/reports/$STRAT.htm"; open "$REPO/reports/$STRAT.htm"
 else
   echo "No report found. Check tester.ini (Symbol must match your broker's gold symbol, e.g. XAUUSDc/XAUUSDm)."
