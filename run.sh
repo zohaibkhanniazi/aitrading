@@ -1,6 +1,7 @@
 #!/bin/bash
 # One-command: git pull -> compile EA -> run Strategy Tester -> open report.
-# Usage: ./run.sh <strategy> [variant|all]   e.g. ./run.sh engulfing_confirm all
+# Usage: ./run.sh <strategy> [variant|group|all]  (group = prefix, e.g. "tune" runs variants/tune_*.ini)
+# (old) Usage: ./run.sh <strategy> [variant|all]   e.g. ./run.sh engulfing_confirm all
 #   variant = a file strategies/<strategy>/variants/<variant>.ini ; "all" runs every variant and compares.
 # MetaTrader 5 must be CLOSED before running (the tester launches its own copy).
 set -u
@@ -55,14 +56,17 @@ run_one() {  # $1 = ini path
 }
 
 SD="$REPO/strategies/$STRAT"
-if [ "$VAR" = "all" ]; then
+GROUP=""
+if [ "$VAR" = "all" ]; then GROUP="$SD/variants/*.ini"
+elif [ -n "$VAR" ] && [ ! -f "$SD/variants/$VAR.ini" ] && ls "$SD"/variants/${VAR}_*.ini >/dev/null 2>&1; then GROUP="$SD/variants/${VAR}_*.ini"; fi
+if [ -n "$GROUP" ]; then
   ARGS=()
-  for f in "$SD"/variants/*.ini; do
+  for f in $GROUP; do
     n=$(basename "$f" .ini); run_one "$f" && ARGS+=("$n=$REPO/reports/$(grep -i '^Report=' "$f" | cut -d= -f2 | tr -d '\r\n ').htm")
   done
   echo "== comparison"
-  python3 "$REPO/tools/compare.py" "$REPO/reports/$STRAT-compare.html" "${ARGS[@]}" | tee "$OUT/compare_$STRAT.txt"
-  cp "$REPO/reports/$STRAT-compare.html" "$OUT/"; open "$REPO/reports/$STRAT-compare.html"
+  python3 "$REPO/tools/compare.py" "$REPO/reports/$STRAT-${VAR:-all}-compare.html" "${ARGS[@]}" | tee "$OUT/compare_${STRAT}_${VAR:-all}.txt"
+  cp "$REPO/reports/$STRAT-${VAR:-all}-compare.html" "$OUT/"; open "$REPO/reports/$STRAT-${VAR:-all}-compare.html"
 else
   INI="$SD/tester.ini"; [ -n "$VAR" ] && INI="$SD/variants/$VAR.ini"
   [ -f "$INI" ] || { echo "Missing $INI"; exit 1; }
