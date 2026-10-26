@@ -51,6 +51,7 @@ run_one() {  # $1 = ini path
   cp "$REPORT" "$REPO/reports/$REP.htm"; cp "$REPORT" "$OUT/$REP.htm"
   echo "===== RESULT: $REP ====="
   python3 "$REPO/tools/summarize.py" "$REPO/reports/$REP.htm" | tee "$OUT/summary_$REP.txt"
+  python3 "$REPO/tools/log_result.py" "$REPO/reports/$REP.htm" "$STRAT" "$REP" "$OUT/results.csv" && python3 "$REPO/tools/report.py" "$OUT/results.csv" "$OUT/leaderboard.html" >/dev/null
   python3 "$REPO/tools/dashboard.py" "$REPO/reports/$REP.htm" "$REPO/reports/$REP-dashboard.html" "$REP" && cp "$REPO/reports/$REP-dashboard.html" "$OUT/"
   LAST_DASH="$REPO/reports/$REP-dashboard.html"
 }
