@@ -1,6 +1,7 @@
 #!/bin/bash
 # One-command: git pull -> compile EA -> run Strategy Tester -> open report.
-# Usage: ./run.sh <strategy_folder_name>     e.g. ./run.sh bullish_engulfing
+# Usage: ./run.sh <strategy> [variant|all]   e.g. ./run.sh engulfing_confirm all
+#   variant = a file strategies/<strategy>/variants/<variant>.ini ; "all" runs every variant and compares.
 # MetaTrader 5 must be CLOSED before running (the tester launches its own copy).
 set -u
 OUT="$HOME/Documents/aitrading-reports"; mkdir -p "$OUT"
@@ -32,18 +33,39 @@ LOG="${SRC%.mq5}.log"
 EX5="${SRC%.mq5}.ex5"
 [ "$EX5" -nt "$SRC" ] || { echo "Compile failed - see $LOG"; [ -f "$LOG" ] && cp "$LOG" "$OUT/compile.log"; exit 1; }
 
-echo "== 3/4 backtest (may take a few minutes)"
-cp "$REPO/strategies/$STRAT/tester.ini" "$MT5DIR/tester_$STRAT.ini"
-touch "$MT5DIR/.start"
-(cd "$MT5DIR" && "$WINE" terminal64.exe "/config:tester_$STRAT.ini")
+VAR="${2:-}"
+run_one() {  # $1 = ini path
+  local INI="$1"
+  local REP; REP=$(grep -i '^Report=' "$INI" | head -1 | cut -d= -f2 | tr -d '\r\n ')
+  cp "$INI" "$MT5DIR/tester_run.ini"
+  touch "$MT5DIR/.start"
+  echo "== backtest: $REP (may take a few minutes)"
+  (cd "$MT5DIR" && "$WINE" terminal64.exe "/config:tester_run.ini")
+  for i in $(seq 1 60); do pgrep -fi "terminal64|metatester64" >/dev/null || break; sleep 2; done
+  sleep 3
+  local REPORT; REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" -name "$REP.htm*" 2>/dev/null | head -1)
+  if [ -z "$REPORT" ]; then echo "No report for $REP. Check Symbol in the ini."; return 1; fi
+  mkdir -p "$REPO/reports"
+  cp "$MT5DIR/$REP"*.png "$REPO/reports/" 2>/dev/null; cp "$MT5DIR/$REP"*.png "$OUT/" 2>/dev/null
+  cp "$REPORT" "$REPO/reports/$REP.htm"; cp "$REPORT" "$OUT/$REP.htm"
+  echo "===== RESULT: $REP ====="
+  python3 "$REPO/tools/summarize.py" "$REPO/reports/$REP.htm" | tee "$OUT/summary_$REP.txt"
+  python3 "$REPO/tools/dashboard.py" "$REPO/reports/$REP.htm" "$REPO/reports/$REP-dashboard.html" "$REP" && cp "$REPO/reports/$REP-dashboard.html" "$OUT/"
+  LAST_DASH="$REPO/reports/$REP-dashboard.html"
+}
 
-echo "== 4/4 report"
-for i in $(seq 1 60); do pgrep -fi "terminal64|metatester64" >/dev/null || break; sleep 2; done
-sleep 3
-REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
-if [ -n "$REPORT" ]; then
-  mkdir -p "$REPO/reports"; cp "$MT5DIR/$STRAT"*.png "$REPO/reports/" 2>/dev/null; cp "$MT5DIR/$STRAT"*.png "$OUT/" 2>/dev/null; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"; iconv -f UTF-16 -t UTF-8 "$REPORT" 2>/dev/null | sed -e "s/<[^>]*>/ /g" -e "s/&nbsp;/ /g" | tr -s " \n" > "$OUT/$STRAT.txt" || sed -e "s/<[^>]*>/ /g" "$REPORT" > "$OUT/$STRAT.txt"
-  echo; echo "===== RESULT: $STRAT ====="; python3 "$REPO/tools/summarize.py" "$REPO/reports/$STRAT.htm" | tee "$OUT/summary_$STRAT.txt"; python3 "$REPO/tools/dashboard.py" "$REPO/reports/$STRAT.htm" "$REPO/reports/$STRAT-dashboard.html" "$STRAT" && cp "$REPO/reports/$STRAT-dashboard.html" "$OUT/" && open "$REPO/reports/$STRAT-dashboard.html"
+SD="$REPO/strategies/$STRAT"
+if [ "$VAR" = "all" ]; then
+  ARGS=()
+  for f in "$SD"/variants/*.ini; do
+    n=$(basename "$f" .ini); run_one "$f" && ARGS+=("$n=$REPO/reports/$(grep -i '^Report=' "$f" | cut -d= -f2 | tr -d '\r\n ').htm")
+  done
+  echo "== comparison"
+  python3 "$REPO/tools/compare.py" "$REPO/reports/$STRAT-compare.html" "${ARGS[@]}" | tee "$OUT/compare_$STRAT.txt"
+  cp "$REPO/reports/$STRAT-compare.html" "$OUT/"; open "$REPO/reports/$STRAT-compare.html"
 else
-  ls -la "$MT5DIR" | grep -i -E "htm|png" ; echo "No report found. Check tester.ini (Symbol must match your broker's gold symbol, e.g. XAUUSDc/XAUUSDm)."
+  INI="$SD/tester.ini"; [ -n "$VAR" ] && INI="$SD/variants/$VAR.ini"
+  [ -f "$INI" ] || { echo "Missing $INI"; exit 1; }
+  LAST_DASH=""
+  run_one "$INI" && [ -n "$LAST_DASH" ] && open "$LAST_DASH"
 fi

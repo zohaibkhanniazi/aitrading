@@ -19,6 +19,19 @@ def num(t, label, pct=False):
     v = float(m.group(1).replace(" ", ""))
     return (v, float(m.group(2))) if pct and m.group(2) else v
 
+def stats(path):
+    t = load(path)
+    dep = num(t, "Initial Deposit:") or 0
+    net = num(t, "Total Net Profit:") or 0
+    gp = num(t, "Gross Profit:") or 0
+    gl = num(t, "Gross Loss:") or 0
+    wins = re.search(r"Profit Trades \(% of total\): (\d+) \(([\d.]+)%\)", t)
+    dd = re.search(r"Equity Drawdown Maximal: (-?[\d ]+\.\d+) \(([\d.]+)%\)", t)
+    return dict(dep=dep, net=net, ret=(net/dep*100 if dep else 0), trades=int(num(t, "Total Trades:") or 0),
+                wr=float(wins.group(2)) if wins else 0.0, pf=num(t, "Profit Factor:") or 0.0,
+                dd=float(dd.group(2)) if dd else 0.0)
+
+
 def main():
     path = sys.argv[1]
     div = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
@@ -55,4 +68,5 @@ def main():
     ]
     print("\n".join(l for l in lines if l))
 
-main()
+if __name__ == "__main__":
+    main()
