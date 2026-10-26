@@ -43,7 +43,7 @@ sleep 3
 REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
 if [ -n "$REPORT" ]; then
   mkdir -p "$REPO/reports"; cp "$MT5DIR/$STRAT"*.png "$REPO/reports/" 2>/dev/null; cp "$MT5DIR/$STRAT"*.png "$OUT/" 2>/dev/null; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"; iconv -f UTF-16 -t UTF-8 "$REPORT" 2>/dev/null | sed -e "s/<[^>]*>/ /g" -e "s/&nbsp;/ /g" | tr -s " \n" > "$OUT/$STRAT.txt" || sed -e "s/<[^>]*>/ /g" "$REPORT" > "$OUT/$STRAT.txt"
-  echo; echo "===== RESULT: $STRAT ====="; python3 "$REPO/tools/summarize.py" "$REPO/reports/$STRAT.htm" | tee "$OUT/summary_$STRAT.txt"; echo "Report: $REPO/reports/$STRAT.htm"; open "$REPO/reports/$STRAT.htm"
+  echo; echo "===== RESULT: $STRAT ====="; python3 "$REPO/tools/summarize.py" "$REPO/reports/$STRAT.htm" | tee "$OUT/summary_$STRAT.txt"; python3 "$REPO/tools/dashboard.py" "$REPO/reports/$STRAT.htm" "$REPO/reports/$STRAT-dashboard.html" "$STRAT" && cp "$REPO/reports/$STRAT-dashboard.html" "$OUT/" && open "$REPO/reports/$STRAT-dashboard.html"
 else
   ls -la "$MT5DIR" | grep -i -E "htm|png" ; echo "No report found. Check tester.ini (Symbol must match your broker's gold symbol, e.g. XAUUSDc/XAUUSDm)."
 fi
