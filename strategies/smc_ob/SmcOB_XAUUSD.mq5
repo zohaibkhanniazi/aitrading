@@ -8,6 +8,8 @@
 //|     above the recent H1 range high (break of structure), with a  |
 //|     minimum displacement. Optional: that candle must have swept  |
 //|     liquidity (new low versus the previous N H1 bars).           |
+//|     Order block counts ONLY if the move left a fair value gap    |
+//|     (3-candle imbalance: newer low > older high).                |
 //|     Zone is dead once an H1 candle closes below it (mitigated).  |
 //|  2. Refine : inside the H1 candle, take the last bearish M30     |
 //|     candle, then inside that the last bearish M15 candle.        |
@@ -30,6 +32,8 @@ input int    InpImpulseBars  = 6;      // Max bars back from break to find the O
 input double InpDispAtr      = 1.0;    // Min move from OB low to peak (x H1 ATR)
 input bool   InpRequireLiq   = true;   // Require liquidity sweep before the OB
 input int    InpLiqBars      = 10;     // Liquidity lookback (H1 bars)
+input bool   InpRequireFvg   = true;   // Order block only counts if it left a fair value gap
+input double InpFvgMinAtr    = 0.05;   // Min FVG size (x H1 ATR)
 input bool   InpZoneBody     = false;  // Zone = candle body only (else full range)
 input bool   InpFreshOnly    = false;  // Skip zones already revisited before
 input int    InpMaxZones     = 6;      // Max zones evaluated per bar
@@ -135,6 +139,18 @@ int FindZones(const SBar &b1[], const int n, const double atr, Zone &zs[])
          double mn = DBL_MAX;
          for(int k4 = ob + 1; k4 <= ob + InpLiqBars; k4++) mn = MathMin(mn, b1[k4].l);
          if(!(b1[ob].l < mn)) continue;                // no liquidity sweep
+      }
+
+      if(InpRequireFvg)
+      {
+         // fair value gap in the impulse after the OB: candle c (newer) low above candle a (older) high
+         bool fvg = false;
+         for(int kf = MathMax(j, 2); kf <= ob - 1; kf++)
+         {
+            double gap = b1[kf - 1].l - b1[kf + 1].h;
+            if(gap > 0 && gap >= InpFvgMinAtr * atr) { fvg = true; break; }
+         }
+         if(!fvg) continue;
       }
 
       double lo = InpZoneBody ? b1[ob].c : b1[ob].l;
