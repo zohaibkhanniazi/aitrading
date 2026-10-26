@@ -35,6 +35,8 @@ input bool   InpAllowRealAccount = false;  // must be set to true to run on a RE
 input double InpDailyLossPct     = 3.0;    // stop opening trades for the day if equity falls this % from the day's start
 input bool   InpAllowMinLot      = false;  // if risk-based lot is below the broker minimum: trade the minimum lot anyway
 input double InpMaxRiskPctMinLot = 3.0;    // ...but only if that minimum lot risks no more than this % of equity
+input double InpFixedLot         = 0.0;    // >0 = always trade this lot size (e.g. 0.01) instead of % risk
+input double InpMaxRiskPctFixed  = 10.0;   // fixed-lot safety: skip the trade if its stop would lose more than this % of equity
 input bool   InpShowPanel        = true;
 input group "Exits"
 input int    InpLegs         = 1;      // 1 = single trade (uses RR), 2 = legs at Leg1R+Leg3R, 3 = legs at Leg1R+Leg2R+Leg3R
@@ -141,6 +143,20 @@ int WindowId(const datetime serverTime)
 double CalcLots(const double stopDistance)
 {
    double riskMoney = AccountInfoDouble(ACCOUNT_EQUITY) * InpRiskPercent / 100.0;
+   if(InpFixedLot > 0)
+   {
+      double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
+      if(tv <= 0) tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      if(ts <= 0 || tv <= 0) return 0.0;
+      double lot = MathMax(InpFixedLot, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
+      double lossMoney = (stopDistance / ts) * tv * lot;
+      double pct = lossMoney / AccountInfoDouble(ACCOUNT_EQUITY) * 100.0;
+      PrintFormat("Fixed lot %.2f: stop %.2f would lose %.2f %s = %.1f%% of equity", lot, stopDistance, lossMoney,
+                  AccountInfoString(ACCOUNT_CURRENCY), pct);
+      if(pct > InpMaxRiskPctFixed) { Print("SKIPPED: fixed-lot risk above InpMaxRiskPctFixed"); return 0.0; }
+      return NormalizeDouble(lot, 2);
+   }
    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
    if(tickValue <= 0) tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
