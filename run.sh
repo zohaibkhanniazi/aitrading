@@ -40,8 +40,8 @@ touch "$MT5DIR/.start"
 echo "== 4/4 report"
 REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
 if [ -n "$REPORT" ]; then
-  mkdir -p "$REPO/reports"; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"
+  mkdir -p "$REPO/reports"; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"; iconv -f UTF-16 -t UTF-8 "$REPORT" 2>/dev/null | sed -e "s/<[^>]*>/ /g" -e "s/&nbsp;/ /g" | tr -s " \n" > "$OUT/$STRAT.txt" || sed -e "s/<[^>]*>/ /g" "$REPORT" > "$OUT/$STRAT.txt"
   echo "Report: $REPO/reports/$STRAT.htm"; open "$REPO/reports/$STRAT.htm"
 else
-  echo "No report found. Check tester.ini (Symbol must match your broker's gold symbol, e.g. XAUUSDc/XAUUSDm)."
+  ls -la "$MT5DIR" | grep -i -E "htm|png" ; echo "No report found. Check tester.ini (Symbol must match your broker's gold symbol, e.g. XAUUSDc/XAUUSDm)."
 fi
