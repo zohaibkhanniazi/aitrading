@@ -38,6 +38,8 @@ VAR="${2:-}"
 run_one() {  # $1 = ini path
   local INI="$1"
   local REP; REP=$(grep -i '^Report=' "$INI" | head -1 | cut -d= -f2 | tr -d '\r\n ')
+  # MT5 remembers the previous run's inputs in a .set file; delete it so every run starts from the EA defaults
+  rm -f "$MT5DIR/MQL5/Profiles/Tester/"*.set 2>/dev/null
   cp "$INI" "$MT5DIR/tester_run.ini"
   touch "$MT5DIR/.start"
   echo "== backtest: $REP (may take a few minutes)"
