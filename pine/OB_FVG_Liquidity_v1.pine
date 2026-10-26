@@ -1,0 +1,285 @@
+//@version=5
+indicator("OB + FVG + Liquidity (rules v1)", overlay = true, max_boxes_count = 500)
+
+// =====================================================================
+//  Marks order blocks with the same rules the MT5 strategy uses.
+//
+//  BULLISH order block (bearish mirror is the exact opposite):
+//   1. A candle closes above the highest high of the previous N bars
+//      (break of structure).
+//   2. The OB is the LAST bearish candle before that break.
+//   3. The move from the OB low to the peak is at least X * ATR.
+//   4. (optional) Liquidity: the OB candle's low is lower than the lows of
+//      the previous L bars (it swept sell-side liquidity).
+//   5. (optional) FVG: the move after the OB left a fair value gap
+//      (3 candles: newer low above older high).
+//   6. Zone is mitigated (turns grey) once price closes through it.
+//
+//  Levels: up to four timeframes (default 60 / 30 / 15 / 5). Lower-level
+//  zones are drawn only if they sit inside an active higher-level zone,
+//  which shows the "filter down to make the stop smaller" idea.
+//  Use a chart timeframe at or below the lowest level you enable.
+// =====================================================================
+
+G1 = "Order block rules"
+structBars  = input.int(8,    "Structure bars (range that must break)", minval = 2, group = G1)
+impulseBars = input.int(6,    "Max bars back to find the OB candle",    minval = 1, group = G1)
+dispAtr     = input.float(1.0,"Min impulse size (x ATR)", step = 0.1,  group = G1)
+reqLiq      = input.bool(true,"Require liquidity sweep",                group = G1)
+liqBars     = input.int(10,   "Liquidity lookback (bars)", minval = 2,  group = G1)
+reqFvg      = input.bool(true,"Require FVG after the OB",               group = G1)
+fvgMinAtr   = input.float(0.05,"Min FVG size (x ATR)", step = 0.01,     group = G1)
+bodyOnly    = input.bool(false,"Zone = candle body only (else full range)", group = G1)
+mitigation  = input.string("Close through", "Zone is mitigated when", options = ["Close through", "Wick through", "Never"], group = G1)
+
+G2 = "Levels"
+on1  = input.bool(true, "Level 1", inline = "l1", group = G2)
+tf1  = input.timeframe("60", "", inline = "l1", group = G2)
+lb1  = input.string("H1", "", inline = "l1", group = G2)
+on2  = input.bool(true, "Level 2", inline = "l2", group = G2)
+tf2  = input.timeframe("30", "", inline = "l2", group = G2)
+lb2  = input.string("M30", "", inline = "l2", group = G2)
+on3  = input.bool(true, "Level 3", inline = "l3", group = G2)
+tf3  = input.timeframe("15", "", inline = "l3", group = G2)
+lb3  = input.string("M15", "", inline = "l3", group = G2)
+on4  = input.bool(true, "Level 4", inline = "l4", group = G2)
+tf4  = input.timeframe("5", "", inline = "l4", group = G2)
+lb4  = input.string("M5", "", inline = "l4", group = G2)
+onlyInside = input.bool(true, "Lower levels only inside an active higher-level zone", group = G2)
+
+G3 = "Display"
+showBull       = input.bool(true, "Show bullish zones", group = G3)
+showBear       = input.bool(true, "Show bearish zones", group = G3)
+showFvg        = input.bool(true, "Show the FVG", group = G3)
+showMitigated  = input.bool(true, "Keep mitigated zones (grey)", group = G3)
+maxPerLevel    = input.int(6, "Max zones kept per level", minval = 1, maxval = 40, group = G3)
+bullCol = input.color(color.new(color.green, 0), "Bullish colour", group = G3)
+bearCol = input.color(color.new(color.red, 0),   "Bearish colour", group = G3)
+
+// ---------------------------------------------------------------------
+f_zones(int _struct, int _imp, float _disp, bool _reqLiq, int _liq, bool _reqFvg, float _fvgMin, bool _body) =>
+    float atr = ta.atr(14)
+    float refH = ta.highest(high, _struct)[1]
+    float refL = ta.lowest(low, _struct)[1]
+
+    bool  bF = false
+    float bLo = na
+    float bHi = na
+    int   bT = na
+    float bfLo = na
+    float bfHi = na
+    int   bfT = na
+    bool  sF = false
+    float sLo = na
+    float sHi = na
+    int   sT = na
+    float sfLo = na
+    float sfHi = na
+    int   sfT = na
+
+    // ---------------- bullish ----------------
+    if close > refH and not na(atr)
+        int ob = 0
+        for k = 1 to _imp
+            if close[k] < open[k]
+                ob := k
+                break
+        if ob > 0
+            float peak = high
+            for i = 1 to ob
+                peak := math.max(peak, high[i])
+            bool ok = (peak - low[ob]) >= _disp * atr
+            if ok and _reqLiq
+                float mn = 1.0e10
+                for i = ob + 1 to ob + _liq
+                    mn := math.min(mn, nz(low[i], 1.0e10))
+                ok := low[ob] < mn
+            float zl = _body ? close[ob] : low[ob]
+            float zh = _body ? open[ob] : high[ob]
+            if ok
+                for m = 0 to ob - 1
+                    if close[m] < zl
+                        ok := false
+                        break
+            bool fv = not _reqFvg
+            float gl = na
+            float gh = na
+            int   gt = na
+            if ok and ob >= 2
+                for kf = 1 to ob - 1
+                    float gap = low[kf - 1] - high[kf + 1]
+                    if gap > 0 and gap >= _fvgMin * atr
+                        fv := true
+                        gl := high[kf + 1]
+                        gh := low[kf - 1]
+                        gt := time[kf + 1]
+                        break
+            if ok and fv
+                bF := true
+                bLo := zl
+                bHi := zh
+                bT := time[ob]
+                bfLo := gl
+                bfHi := gh
+                bfT := gt
+
+    // ---------------- bearish (mirror) ----------------
+    if close < refL and not na(atr)
+        int ob2 = 0
+        for k2 = 1 to _imp
+            if close[k2] > open[k2]
+                ob2 := k2
+                break
+        if ob2 > 0
+            float trough = low
+            for i2 = 1 to ob2
+                trough := math.min(trough, low[i2])
+            bool ok2 = (high[ob2] - trough) >= _disp * atr
+            if ok2 and _reqLiq
+                float mx = -1.0e10
+                for i3 = ob2 + 1 to ob2 + _liq
+                    mx := math.max(mx, nz(high[i3], -1.0e10))
+                ok2 := high[ob2] > mx
+            float zh2 = _body ? close[ob2] : high[ob2]
+            float zl2 = _body ? open[ob2] : low[ob2]
+            if ok2
+                for m2 = 0 to ob2 - 1
+                    if close[m2] > zh2
+                        ok2 := false
+                        break
+            bool fv2 = not _reqFvg
+            float gl2 = na
+            float gh2 = na
+            int   gt2 = na
+            if ok2 and ob2 >= 2
+                for kf2 = 1 to ob2 - 1
+                    float gap2 = low[kf2 + 1] - high[kf2 - 1]
+                    if gap2 > 0 and gap2 >= _fvgMin * atr
+                        fv2 := true
+                        gl2 := high[kf2 - 1]
+                        gh2 := low[kf2 + 1]
+                        gt2 := time[kf2 + 1]
+                        break
+            if ok2 and fv2
+                sF := true
+                sLo := zl2
+                sHi := zh2
+                sT := time[ob2]
+                sfLo := gl2
+                sfHi := gh2
+                sfT := gt2
+
+    // shift by one HTF bar so values are final (no repainting)
+    [bF[1], bLo[1], bHi[1], bT[1], bfLo[1], bfHi[1], bfT[1], sF[1], sLo[1], sHi[1], sT[1], sfLo[1], sfHi[1], sfT[1]]
+
+[bF1, bLo1, bHi1, bT1, bfLo1, bfHi1, bfT1, sF1, sLo1, sHi1, sT1, sfLo1, sfHi1, sfT1] = request.security(syminfo.tickerid, tf1, f_zones(structBars, impulseBars, dispAtr, reqLiq, liqBars, reqFvg, fvgMinAtr, bodyOnly), lookahead = barmerge.lookahead_on)
+[bF2, bLo2, bHi2, bT2, bfLo2, bfHi2, bfT2, sF2, sLo2, sHi2, sT2, sfLo2, sfHi2, sfT2] = request.security(syminfo.tickerid, tf2, f_zones(structBars, impulseBars, dispAtr, reqLiq, liqBars, reqFvg, fvgMinAtr, bodyOnly), lookahead = barmerge.lookahead_on)
+[bF3, bLo3, bHi3, bT3, bfLo3, bfHi3, bfT3, sF3, sLo3, sHi3, sT3, sfLo3, sfHi3, sfT3] = request.security(syminfo.tickerid, tf3, f_zones(structBars, impulseBars, dispAtr, reqLiq, liqBars, reqFvg, fvgMinAtr, bodyOnly), lookahead = barmerge.lookahead_on)
+[bF4, bLo4, bHi4, bT4, bfLo4, bfHi4, bfT4, sF4, sLo4, sHi4, sT4, sfLo4, sfHi4, sfT4] = request.security(syminfo.tickerid, tf4, f_zones(structBars, impulseBars, dispAtr, reqLiq, liqBars, reqFvg, fvgMinAtr, bodyOnly), lookahead = barmerge.lookahead_on)
+
+// ---------------------------------------------------------------------
+var zbox  = array.new<box>()
+var fbox  = array.new<box>()
+var zlo   = array.new<float>()
+var zhi   = array.new<float>()
+var zdir  = array.new<int>()
+var zlvl  = array.new<int>()
+var zact  = array.new<bool>()
+var lastT = array.new<int>(8, 0)
+
+f_add(int lvl, int dir, bool found, float lo, float hi, int t, float flo, float fhi, int ft, string txt, int bw) =>
+    int slot = lvl * 2 + (dir > 0 ? 0 : 1)
+    if found and not na(t) and t != array.get(lastT, slot)
+        array.set(lastT, slot, t)
+        bool ok = true
+        if onlyInside and lvl > 0
+            ok := false
+            int n = array.size(zbox)
+            if n > 0
+                for i = 0 to n - 1
+                    if array.get(zact, i) and array.get(zdir, i) == dir and array.get(zlvl, i) < lvl
+                        if lo <= array.get(zhi, i) and hi >= array.get(zlo, i)
+                            ok := true
+        if ok
+            color border = dir > 0 ? bullCol : bearCol
+            box b = box.new(t, hi, time, lo, xloc = xloc.bar_time, border_color = border, border_width = bw, bgcolor = color.new(border, 85), text = txt, text_size = size.tiny, text_color = border, text_halign = text.align_left, text_valign = text.align_top)
+            box fb = na
+            if showFvg and not na(flo) and not na(ft)
+                fb := box.new(ft, fhi, time, flo, xloc = xloc.bar_time, border_color = color.new(border, 50), border_style = line.style_dotted, border_width = 1, bgcolor = color.new(color.yellow, 85))
+            array.push(zbox, b)
+            array.push(fbox, fb)
+            array.push(zlo, lo)
+            array.push(zhi, hi)
+            array.push(zdir, dir)
+            array.push(zlvl, lvl)
+            array.push(zact, true)
+            int cnt = 0
+            int first = -1
+            for j = 0 to array.size(zbox) - 1
+                if array.get(zlvl, j) == lvl
+                    cnt += 1
+                    if first < 0
+                        first := j
+            if cnt > maxPerLevel and first >= 0
+                box.delete(array.get(zbox, first))
+                box old = array.get(fbox, first)
+                if not na(old)
+                    box.delete(old)
+                array.remove(zbox, first)
+                array.remove(fbox, first)
+                array.remove(zlo, first)
+                array.remove(zhi, first)
+                array.remove(zdir, first)
+                array.remove(zlvl, first)
+                array.remove(zact, first)
+
+// ---- 1) update existing zones: extend, mitigate -------------------------
+bool tapAny = false
+int total = array.size(zbox)
+if total > 0
+    for i = 0 to total - 1
+        box zb = array.get(zbox, i)
+        box fz = array.get(fbox, i)
+        float zlow = array.get(zlo, i)
+        float zhigh = array.get(zhi, i)
+        int zd = array.get(zdir, i)
+        if array.get(zact, i)
+            bool mit = false
+            if mitigation == "Close through"
+                mit := zd > 0 ? close < zlow : close > zhigh
+            else if mitigation == "Wick through"
+                mit := zd > 0 ? low < zlow : high > zhigh
+            box.set_right(zb, time)
+            if not na(fz)
+                box.set_right(fz, time)
+            if mit
+                array.set(zact, i, false)
+                if showMitigated
+                    box.set_bgcolor(zb, color.new(color.gray, 90))
+                    box.set_border_color(zb, color.new(color.gray, 50))
+                    box.set_text_color(zb, color.new(color.gray, 30))
+                else
+                    box.set_bgcolor(zb, color.new(color.gray, 100))
+                    box.set_border_color(zb, color.new(color.gray, 100))
+                    box.set_text_color(zb, color.new(color.gray, 100))
+                if not na(fz)
+                    box.set_bgcolor(fz, color.new(color.gray, 100))
+                    box.set_border_color(fz, color.new(color.gray, 100))
+            else if array.get(zlvl, i) == 0 and low <= zhigh and high >= zlow
+                tapAny := true
+
+// ---- 2) add newly confirmed zones ----------------------------------------
+if on1
+    f_add(0,  1, bF1 and showBull, bLo1, bHi1, bT1, bfLo1, bfHi1, bfT1, lb1 + " OB ▲", 3)
+    f_add(0, -1, sF1 and showBear, sLo1, sHi1, sT1, sfLo1, sfHi1, sfT1, lb1 + " OB ▼", 3)
+if on2
+    f_add(1,  1, bF2 and showBull, bLo2, bHi2, bT2, bfLo2, bfHi2, bfT2, lb2 + " OB ▲", 2)
+    f_add(1, -1, sF2 and showBear, sLo2, sHi2, sT2, sfLo2, sfHi2, sfT2, lb2 + " OB ▼", 2)
+if on3
+    f_add(2,  1, bF3 and showBull, bLo3, bHi3, bT3, bfLo3, bfHi3, bfT3, lb3 + " OB ▲", 1)
+    f_add(2, -1, sF3 and showBear, sLo3, sHi3, sT3, sfLo3, sfHi3, sfT3, lb3 + " OB ▼", 1)
+if on4
+    f_add(3,  1, bF4 and showBull, bLo4, bHi4, bT4, bfLo4, bfHi4, bfT4, lb4 + " OB ▲", 1)
+    f_add(3, -1, sF4 and showBear, sLo4, sHi4, sT4, sfLo4, sfHi4, sfT4, lb4 + " OB ▼", 1)
+
+alertcondition(tapAny, "Price tapped an active level-1 zone", "Price is inside an active level-1 order block")
