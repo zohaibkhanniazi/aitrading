@@ -8,8 +8,8 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 
 APP="/Applications/MetaTrader 5.app"
 PREFIX="$HOME/Library/Application Support/net.metaquotes.wine.metatrader5"
-WINE="$(find "$APP" -name wine64 -type f 2>/dev/null | head -1)"
-[ -z "$WINE" ] && WINE="$(find "$APP" -name wine -type f 2>/dev/null | head -1)"
+WINE="$APP/Contents/SharedSupport/wine/bin/wine64"
+[ -x "$WINE" ] || WINE="$APP/Contents/SharedSupport/wine/bin/wine"
 MT5DIR="$PREFIX/drive_c/Program Files/MetaTrader 5"
 
 [ -x "$WINE" ] || { echo "Cannot find Wine inside $APP. Edit APP at top of run.sh."; exit 1; }
@@ -24,7 +24,7 @@ SRC=$(ls "$REPO/strategies/$STRAT/"*.mq5 2>/dev/null | head -1)
 WIN_SRC="C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\aitrading\\strategies\\$STRAT\\$(basename "$SRC")"
 
 echo "== 2/4 compile"
-"$WINE" "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe" /compile:"$WIN_SRC" /log >/dev/null 2>&1
+"$WINE" "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe" /compile:"$WIN_SRC" /log 2>&1 | tail -5
 LOG="${SRC%.mq5}.log"
 [ -f "$LOG" ] && iconv -f UTF-16 -t UTF-8 "$LOG" 2>/dev/null | tail -3
 EX5="${SRC%.mq5}.ex5"
