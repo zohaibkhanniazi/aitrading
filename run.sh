@@ -56,15 +56,20 @@ run_one() {  # $1 = ini path
 }
 
 SD="$REPO/strategies/$STRAT"
-GROUP=""
-if [ "$VAR" = "all" ]; then GROUP="$SD/variants/*.ini"
-elif [ -n "$VAR" ] && [ ! -f "$SD/variants/$VAR.ini" ] && ls "$SD"/variants/${VAR}_*.ini >/dev/null 2>&1; then GROUP="$SD/variants/${VAR}_*.ini"; fi
-if [ -n "$GROUP" ]; then
+FILES=()
+if [ "$VAR" = "all" ]; then
+  for f in "$SD"/variants/*.ini; do FILES+=("$f"); done
+elif [ -n "$VAR" ] && [ ! -f "$SD/variants/$VAR.ini" ]; then
+  for f in "$SD"/variants/"$VAR"_*.ini; do [ -f "$f" ] && FILES+=("$f"); done
+fi
+if [ "${#FILES[@]}" -gt 0 ]; then
   ARGS=()
-  for f in $GROUP; do
-    n=$(basename "$f" .ini); run_one "$f" && ARGS+=("$n=$REPO/reports/$(grep -i '^Report=' "$f" | cut -d= -f2 | tr -d '\r\n ').htm")
+  for f in "${FILES[@]}"; do
+    n=$(basename "$f" .ini); rep=$(grep -i '^Report=' "$f" | head -1 | cut -d= -f2 | tr -d '\r\n ')
+    run_one "$f" && ARGS+=("$n=$REPO/reports/$rep.htm")
   done
   echo "== comparison"
+  [ "${#ARGS[@]}" -gt 0 ] || { echo "No reports produced."; exit 1; }
   python3 "$REPO/tools/compare.py" "$REPO/reports/$STRAT-${VAR:-all}-compare.html" "${ARGS[@]}" | tee "$OUT/compare_${STRAT}_${VAR:-all}.txt"
   cp "$REPO/reports/$STRAT-${VAR:-all}-compare.html" "$OUT/"; open "$REPO/reports/$STRAT-${VAR:-all}-compare.html"
 else
