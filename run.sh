@@ -38,6 +38,8 @@ touch "$MT5DIR/.start"
 (cd "$MT5DIR" && "$WINE" terminal64.exe "/config:tester_$STRAT.ini")
 
 echo "== 4/4 report"
+for i in $(seq 1 60); do pgrep -fi "terminal64|metatester64" >/dev/null || break; sleep 2; done
+sleep 3
 REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" \( -name "*$STRAT*.htm" -o -name "*$STRAT*.html" \) 2>/dev/null | head -1)
 if [ -n "$REPORT" ]; then
   mkdir -p "$REPO/reports"; cp "$REPORT" "$REPO/reports/$STRAT.htm"; cp "$REPORT" "$OUT/$STRAT.htm"; iconv -f UTF-16 -t UTF-8 "$REPORT" 2>/dev/null | sed -e "s/<[^>]*>/ /g" -e "s/&nbsp;/ /g" | tr -s " \n" > "$OUT/$STRAT.txt" || sed -e "s/<[^>]*>/ /g" "$REPORT" > "$OUT/$STRAT.txt"
