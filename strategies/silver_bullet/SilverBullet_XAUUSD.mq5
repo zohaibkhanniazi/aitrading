@@ -26,9 +26,17 @@ input int    InpFvgSearch    = 10;     // how many recent bars to search for the
 input double InpFvgMinAtr    = 0.10;   // min FVG size (x M5 ATR)
 input int    InpEntryMode    = 0;      // 0 = FVG edge, 1 = FVG midpoint
 input int    InpSlMode       = 0;      // 0 = below FVG first candle low, 1 = below sweep low
+input group "Exits"
+input int    InpLegs         = 1;      // 1 = single trade (uses RR), 2 = legs at Leg1R+Leg3R, 3 = legs at Leg1R+Leg2R+Leg3R
+input double InpLeg1R        = 1.0;
+input double InpLeg2R        = 2.0;
+input double InpLeg3R        = 3.0;
+input bool   InpMoveBE       = false;  // move stop to break-even once price reaches BeTriggerR
+input double InpBeTriggerR   = 1.0;
+input double InpBeOffset     = 0.0;    // USD beyond entry for the break-even stop
 input group "Risk"
-input double InpRiskPercent  = 1.0;
-input double InpRR           = 2.0;
+input double InpRiskPercent  = 1.0;   // total risk, split equally across legs
+input double InpRR           = 2.0;   // used when Legs = 1
 input double InpStopBuffer   = 0.10;
 input double InpMinStop      = 0.80;
 input double InpMaxStop      = 30.0;
@@ -198,16 +206,74 @@ bool TrySetup(const int dir)
    if(dist < InpMinStop || dist > InpMaxStop || dist <= minLevel) return false;
    double lots = CalcLots(dist);
    if(lots <= 0) return false;
-   double tp = e + InpRR * dist;
-   double slR = NormalizeDouble(dir * sl, _Digits), tpR = NormalizeDouble(dir * tp, _Digits);
-   bool ok = (dir > 0) ? trade.Buy(lots, _Symbol, 0.0, slR, tpR, "SilverBullet")
-                       : trade.Sell(lots, _Symbol, 0.0, slR, tpR, "SilverBullet");
-   if(ok) { cEntry++; lastWin[di] = wkey; }
-   return ok;
+   double slR = NormalizeDouble(dir * sl, _Digits);
+
+   int legs = InpLegs;
+   double rs[3];
+   rs[0] = InpRR; rs[1] = 0; rs[2] = 0;
+   if(legs >= 2)
+   {
+      double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double each = MathFloor(lots / legs / step) * step;
+      if(each >= minLot)
+      {
+         lots = NormalizeDouble(each, 2);
+         rs[0] = InpLeg1R;
+         if(legs == 2) rs[1] = InpLeg3R;
+         else { rs[1] = InpLeg2R; rs[2] = InpLeg3R; }
+      }
+      else legs = 1;                                   // too small to split
+   }
+   bool okAll = true;
+   for(int i = 0; i < legs; i++)
+   {
+      double tp = e + rs[i] * dist;
+      double tpR = NormalizeDouble(dir * tp, _Digits);
+      string cm = StringFormat("SB|%.2f", rs[i]);
+      bool ok = (dir > 0) ? trade.Buy(lots, _Symbol, 0.0, slR, tpR, cm)
+                          : trade.Sell(lots, _Symbol, 0.0, slR, tpR, cm);
+      if(!ok) okAll = false;
+   }
+   if(okAll) { cEntry++; lastWin[di] = wkey; }
+   return okAll;
+}
+
+//--- move the stop of open legs to break-even once price has travelled BeTriggerR x risk
+void ManageBE()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      string cm = PositionGetString(POSITION_COMMENT);
+      int p = StringFind(cm, "|");
+      if(p < 0) continue;
+      double rmul = StringToDouble(StringSubstr(cm, p + 1));
+      if(rmul <= 0) continue;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl = PositionGetDouble(POSITION_SL), tp = PositionGetDouble(POSITION_TP);
+      long type = PositionGetInteger(POSITION_TYPE);
+      if(type == POSITION_TYPE_BUY)
+      {
+         double dist = (tp - open) / rmul;
+         if(sl < open - _Point && bid >= open + InpBeTriggerR * dist)
+            trade.PositionModify(ticket, NormalizeDouble(open + InpBeOffset, _Digits), tp);
+      }
+      else if(type == POSITION_TYPE_SELL)
+      {
+         double dist = (open - tp) / rmul;
+         if(sl > open + _Point && ask <= open - InpBeTriggerR * dist)
+            trade.PositionModify(ticket, NormalizeDouble(open - InpBeOffset, _Digits), tp);
+      }
+   }
 }
 
 void OnTick()
 {
+   if(InpMoveBE) ManageBE();
    datetime bt = iTime(_Symbol, PERIOD_M5, 0);
    if(bt == lastBar) return;
    lastBar = bt;
