@@ -42,7 +42,7 @@ run_one() {  # $1 = ini path
   rm -f "$MT5DIR/MQL5/Profiles/Tester/"*.set 2>/dev/null
   cp "$INI" "$MT5DIR/tester_run.ini"
   # Optional: TESTSYM=XAUUSDm ./run.sh ...  -> test on the account's own gold symbol (standard account: USD, deposit TESTDEP, default 10000)
-  if [ -n "$TESTSYM" ]; then
+  if [ -n "${TESTSYM:-}" ]; then
     sed -e "s/^Symbol=.*/Symbol=$TESTSYM/" -e "s/^Currency=.*/Currency=USD/" -e "s/^Deposit=.*/Deposit=${TESTDEP:-10000}/" "$MT5DIR/tester_run.ini" > "$MT5DIR/tester_run.tmp" && mv "$MT5DIR/tester_run.tmp" "$MT5DIR/tester_run.ini"
   fi
   touch "$MT5DIR/.start"
