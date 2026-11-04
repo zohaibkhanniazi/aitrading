@@ -13,6 +13,11 @@
 //|       POI far edge) + buffer x ATR; target InpRR x risk.         |
 //|  POI dies when a candle closes beyond its far edge or after      |
 //|  InpPoiLife POI candles. One attempt per POI.                    |
+//|  Filters (v2, off by default):                                   |
+//|    Bias     : trade only in the direction of the last BOS/CHoCH  |
+//|               on InpBiasTF (H4).                                 |
+//|    Discount : buy POIs only below the middle of the InpBiasTF    |
+//|               swing range, sell POIs only above it (premium).    |
 //+------------------------------------------------------------------+
 #property copyright "v1"
 #property version   "1.00"
@@ -31,6 +36,11 @@ input int    InpStopMode    = 0;      // 0 = beyond the pullback extreme, 1 = be
 input double InpSlBufAtr    = 0.10;   // stop buffer (x ATR 14, chart timeframe)
 input double InpRR          = 3.0;
 input int    InpMaxOpen     = 3;      // max simultaneous trades
+input group "Filters"
+input bool   InpUseBias     = false;  // only POIs in the direction of InpBiasTF structure
+input bool   InpUseDiscount = false;  // buy only in discount, sell only in premium of the InpBiasTF range
+input ENUM_TIMEFRAMES InpBiasTF = PERIOD_H4;
+input int    InpBiasLen     = 3;      // swing length on InpBiasTF
 input group "Risk"
 input double InpRiskPercent = 1.0;
 input double InpMinStop     = 0.80;
@@ -49,14 +59,23 @@ struct Poi
    datetime born;
 };
 
+struct Tracker
+{
+   double   hiP, loP;
+   datetime hiT, loT, lastBar;
+   bool     hiBroken, loBroken;
+   int      trend;
+};
+
 CTrade   trade;
+Tracker  bias;
 Poi      pois[];
 int      hAtr = INVALID_HANDLE;
 datetime lastBar = 0, lastPoiBar = 0;
 double   hiP = 0, loP = 0;
 bool     hiBroken = true, loBroken = true;
 int      trend = 0;
-int      cPoi = 0, cTouch = 0, cConf = 0, cTrades = 0, cKill = 0, cExp = 0, cSkip = 0;
+int      cPoi = 0, cTouch = 0, cConf = 0, cTrades = 0, cKill = 0, cExp = 0, cSkip = 0, cFiltBias = 0, cFiltDisc = 0;
 
 int OnInit()
 {
@@ -66,14 +85,15 @@ int OnInit()
    hAtr = iATR(_Symbol, _Period, 14);
    if(hAtr == INVALID_HANDLE) return INIT_FAILED;
    ArrayResize(pois, 0);
+   ZeroMemory(bias);
    PrintFormat("PoiEntry started on %s: POI %s, entry %s", _Symbol, EnumToString(InpPoiTF), EnumToString(_Period));
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
-   PrintFormat("FUNNEL pois=%d touched=%d confirmed=%d trades=%d skipped=%d killed=%d expired=%d",
-               cPoi, cTouch, cConf, cTrades, cSkip, cKill, cExp);
+   PrintFormat("FUNNEL pois=%d touched=%d confirmed=%d trades=%d skipped=%d killed=%d expired=%d biasFiltered=%d discountFiltered=%d",
+               cPoi, cTouch, cConf, cTrades, cSkip, cKill, cExp, cFiltBias, cFiltDisc);
    if(hAtr != INVALID_HANDLE) IndicatorRelease(hAtr);
 }
 
@@ -114,10 +134,49 @@ double CalcLots(const double stopDistance)
    return NormalizeDouble(lots, 2);
 }
 
+//--- bias timeframe: latest swings and the direction of the last structure break
+void UpdateTracker(Tracker &t, const ENUM_TIMEFRAMES tf, const int L)
+{
+   int k = L + 1;
+   double hk = iHigh(_Symbol, tf, k), lk = iLow(_Symbol, tf, k);
+   if(hk <= 0 || lk <= 0) return;
+   bool ph = true, pl = true;
+   for(int j = 1; j <= L; j++)
+   {
+      if(iHigh(_Symbol, tf, k - j) >= hk || iHigh(_Symbol, tf, k + j) >= hk) ph = false;
+      if(iLow(_Symbol, tf, k - j)  <= lk || iLow(_Symbol, tf, k + j)  <= lk) pl = false;
+   }
+   if(ph) { t.hiP = hk; t.hiT = iTime(_Symbol, tf, k); t.hiBroken = false; }
+   if(pl) { t.loP = lk; t.loT = iTime(_Symbol, tf, k); t.loBroken = false; }
+   double c1 = iClose(_Symbol, tf, 1);
+   if(t.hiP > 0 && !t.hiBroken && c1 > t.hiP)      { t.hiBroken = true; t.trend = 1; }
+   else if(t.loP > 0 && !t.loBroken && c1 < t.loP) { t.loBroken = true; t.trend = -1; }
+}
+
+//--- middle of the bias-timeframe dealing range (latest swing low .. latest swing high, extended by any newer extremes)
+bool RangeEq(double &eq)
+{
+   if(bias.hiP <= 0 || bias.loP <= 0) return false;
+   double hi = bias.hiP, lo = bias.loP;
+   int sh = iBarShift(_Symbol, InpBiasTF, bias.hiT), sl = iBarShift(_Symbol, InpBiasTF, bias.loT);
+   if(sh > 0) hi = MathMax(hi, iHigh(_Symbol, InpBiasTF, iHighest(_Symbol, InpBiasTF, MODE_HIGH, sh, 0)));
+   if(sl > 0) lo = MathMin(lo, iLow(_Symbol, InpBiasTF, iLowest(_Symbol, InpBiasTF, MODE_LOW, sl, 0)));
+   eq = (hi + lo) / 2.0;
+   return true;
+}
+
 void AddPoi(const int dir, const double top, const double bot)
 {
    if(dir > 0 && !InpAllowLong) return;
    if(dir < 0 && !InpAllowShort) return;
+   if(InpUseBias && bias.trend != dir) { cFiltBias++; return; }
+   if(InpUseDiscount)
+   {
+      double eq;
+      if(!RangeEq(eq)) { cFiltDisc++; return; }
+      double mid = (top + bot) / 2.0;
+      if(dir > 0 ? mid >= eq : mid <= eq) { cFiltDisc++; return; }
+   }
    int n = ArraySize(pois);
    ArrayResize(pois, n + 1);
    pois[n].top = top; pois[n].bot = bot; pois[n].dir = dir;
@@ -209,7 +268,13 @@ void ProcessPois(const int res)
          {
             pois[i].ext = (d > 0) ? MathMin(pois[i].ext, l1) : MathMax(pois[i].ext, h1);
             bool conf = (InpConfirm == 0) ? (res == 2 * d) : (res == d || res == 2 * d);
-            if(conf) { cConf++; Enter(d, pois[i]); remove = true; }
+            if(conf)
+            {
+               cConf++;
+               if(InpUseBias && bias.trend != d) cFiltBias++;      // bias flipped while waiting
+               else Enter(d, pois[i]);
+               remove = true;
+            }
          }
       }
       if(remove) ArrayRemove(pois, i, 1);
@@ -218,6 +283,8 @@ void ProcessPois(const int res)
 
 void OnTick()
 {
+   datetime bb = iTime(_Symbol, InpBiasTF, 0);
+   if(bb != bias.lastBar) { bias.lastBar = bb; UpdateTracker(bias, InpBiasTF, InpBiasLen); }
    datetime pb = iTime(_Symbol, InpPoiTF, 0);
    bool newPoiBar = (pb != lastPoiBar);
    datetime bt = iTime(_Symbol, _Period, 0);
