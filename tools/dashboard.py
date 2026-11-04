@@ -5,7 +5,7 @@ Cent accounts (USC) are shown in USD (divided by 100). No external dependencies.
 import re, sys, html, math
 from collections import defaultdict
 
-N8 = r"-?\d{1,3}(?: \d{3})*\.\d{8}"
+N8 = r"-?\d{1,3}(?: \d{3})*\.\d+"   # USC reports print 8 decimals, USD reports 2
 ROW = re.compile(
     r"(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d) (\d+) (\w+) (buy|sell) (in|out) ([\d.]+) ([\d.]+) (\d+) "
     rf"({N8}) ({N8}) ({N8}) ({N8})(?: ((?:tp|sl|so)\b|[A-Za-z]\w*))?")
