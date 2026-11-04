@@ -1,0 +1,581 @@
+// ICT Toolkit v3 -- part of zohaibkhanniazi/aitrading
+//@version=5
+indicator("ICT Toolkit v3: FVG, BOS, CHoCH, MB, BB, ITH/ITL, Liquidity, HTF POI entries", shorttitle = "ICT Toolkit v3", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_bars_back = 2000)
+
+// =====================================================================
+// Inputs
+// =====================================================================
+G1 = "Market structure"
+intLen   = input.int(3, "Internal swing length", minval = 1, group = G1, tooltip = "Candles on each side of an internal (minor) swing point")
+extLen   = input.int(10, "External swing length", minval = 2, group = G1, tooltip = "Candles on each side of an external (major) swing point")
+brkMode  = input.string("Close", "Break confirmed by", options = ["Close", "Wick"], group = G1, tooltip = "Close = a candle body must close beyond the swing. Wick = any trade beyond it.")
+showIntS = input.bool(true, "Internal BOS / CHoCH (dashed)", group = G1)
+showExtS = input.bool(true, "External BOS / CHoCH (solid)", group = G1)
+cBull    = input.color(#089981, "Bullish", group = G1, inline = "c")
+cBear    = input.color(#F23645, "Bearish", group = G1, inline = "c")
+
+G2 = "ITH / ITL"
+showIntIT = input.bool(true, "Internal ITH / ITL (labels iTH / iTL)", group = G2)
+showExtIT = input.bool(true, "External ITH / ITL (labels ITH / ITL)", group = G2)
+cIT       = input.color(#2962FF, "Colour", group = G2)
+
+G3 = "Fair value gaps"
+showFvg = input.bool(true, "Show FVGs", group = G3)
+fvgMin  = input.float(0.0, "Min size (x ATR 14, 0 = every gap)", minval = 0, step = 0.05, group = G3)
+fvgMit  = input.string("Full fill", "Remove when price", options = ["Touches", "Reaches 50%", "Full fill"], group = G3)
+fvgKeep = input.bool(false, "Keep filled FVGs (grey)", group = G3)
+fvgMax  = input.int(40, "Max active FVGs", minval = 1, maxval = 200, group = G3)
+cFvgUp  = input.color(color.new(#089981, 80), "Bullish FVG", group = G3, inline = "f")
+cFvgDn  = input.color(color.new(#F23645, 80), "Bearish FVG", group = G3, inline = "f")
+
+G4 = "Breaker / mitigation blocks"
+showBlk   = input.bool(true, "Show blocks", group = G4)
+blkSrc    = input.string("External", "Built from structure", options = ["Internal", "External"], group = G4)
+blkSearch = input.int(10, "Candles searched for the block candle", minval = 1, maxval = 50, group = G4)
+blkKeep   = input.bool(true, "Keep invalidated blocks (grey)", group = G4)
+blkMax    = input.int(10, "Max active blocks", minval = 1, maxval = 50, group = G4)
+cBB       = input.color(color.new(#FF9800, 75), "Breaker", group = G4, inline = "b")
+cMB       = input.color(color.new(#9C27B0, 75), "Mitigation", group = G4, inline = "b")
+
+G5 = "Liquidity"
+showPools = input.bool(true, "Buy-side / sell-side liquidity at external swings", group = G5)
+keepSwept = input.bool(true, "Keep taken levels (grey, dotted)", group = G5)
+poolMax   = input.int(15, "Max active levels per side", minval = 1, maxval = 50, group = G5)
+showEq    = input.bool(true, "Equal highs / lows (EQH / EQL)", group = G5)
+eqThr     = input.float(0.10, "Equal tolerance (x ATR 14)", minval = 0, step = 0.05, group = G5)
+showPD    = input.bool(true, "Previous day high / low", group = G5)
+cLiq      = input.color(#787B86, "Liquidity colour", group = G5)
+
+G6 = "HTF POI -> LTF entry"
+useEntry    = input.bool(true, "Enable POI entries", group = G6)
+poiTf       = input.timeframe("60", "POI timeframe", group = G6)
+poiType     = input.string("OB + FVG", "POI type", options = ["OB + FVG", "FVG", "Both"], group = G6, tooltip = "OB + FVG = last opposite candle before an HTF displacement that left a fair value gap. FVG = the HTF gap itself.")
+poiMinGap   = input.float(0.0, "Min HTF gap (x HTF ATR 14)", minval = 0, step = 0.05, group = G6)
+poiLife     = input.int(48, "POI expires after (HTF candles)", minval = 1, group = G6)
+poiMax      = input.int(8, "Max active POIs", minval = 1, maxval = 30, group = G6)
+showPoi     = input.bool(true, "Draw POI zones", group = G6)
+confirmMode = input.string("CHoCH only", "Confirmation inside the POI", options = ["CHoCH only", "BOS or CHoCH"], group = G6, tooltip = "Structure break on the chart timeframe, in the POI direction, after price has entered the POI")
+confStruct  = input.string("Internal", "Confirmation structure", options = ["Internal", "External"], group = G6, tooltip = "Internal = small swings (fast, noisy). External = bigger swings (slower, fewer false signals on 1m-5m).")
+stopMode    = input.string("Pullback extreme", "Stop placed beyond", options = ["Pullback extreme", "POI far edge"], group = G6, tooltip = "Pullback extreme = tightest stop. POI far edge = stop beyond the whole HTF zone (wider, survives noise inside the POI).")
+entryMode   = input.string("Break close", "Entry", options = ["Break close", "LTF FVG retest"], group = G6, tooltip = "Break close = enter at the close of the confirming candle. LTF FVG retest = limit order at the newest chart-timeframe FVG formed after the POI touch.")
+pendMax     = input.int(30, "FVG retest: cancel after (candles)", minval = 1, group = G6)
+slBuf       = input.float(0.1, "Stop buffer beyond the pullback extreme (x ATR 14)", minval = 0, step = 0.05, group = G6)
+rrTp        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = G6)
+showStats   = input.bool(true, "Results table", group = G6)
+cPoiUp      = input.color(color.new(#00BCD4, 85), "Bullish POI", group = G6, inline = "p")
+cPoiDn      = input.color(color.new(#E91E63, 85), "Bearish POI", group = G6, inline = "p")
+
+// =====================================================================
+// Types
+// =====================================================================
+type Swing
+    float price
+    int   bar
+    bool  broken = false
+
+type Structure
+    array<float> hiP
+    array<int>   hiB
+    array<float> loP
+    array<int>   loB
+    Swing        hi
+    Swing        lo
+    int          trend = 0
+
+type Zone
+    box   bx
+    float top
+    float bottom
+    int   dir
+    int   kind
+    int   born
+
+type Pool
+    line  ln
+    float price
+    int   dir
+    int   born
+
+type Poi
+    box    bx
+    float  top
+    float  bottom
+    int    dir
+    int    bornTime
+    int    state = 0
+    int    touchBar
+    float  ext
+    float  entry
+    float  sl
+    float  tp
+    int    pendBar
+    string kind
+
+type Trade
+    int   dir
+    float entry
+    float sl
+    float tp
+    int   bar
+    line  le
+    line  ls
+    line  lt
+    label lb
+
+type Stats
+    int   trades = 0
+    int   wins = 0
+    int   losses = 0
+    float netR = 0.0
+
+// newest chart-timeframe FVGs (used by the "LTF FVG retest" entry)
+var float lastBullTop = na
+var int   lastBullBar = na
+var float lastBearBot = na
+var int   lastBearBar = na
+
+// =====================================================================
+// Functions
+// =====================================================================
+newStructure() =>
+    Structure.new(array.new_float(), array.new_int(), array.new_float(), array.new_int(), Swing.new(na, na, true), Swing.new(na, na, true), 0)
+
+// Register a new swing high. The previous swing is an ITH when it is higher than the swing before it and the new one.
+addHigh(Structure s, float p, int b, bool showIT, string txt, string sz) =>
+    int n = array.size(s.hiP)
+    if n >= 2
+        float mid  = array.get(s.hiP, n - 1)
+        float prev = array.get(s.hiP, n - 2)
+        if showIT and mid > prev and mid > p
+            label.new(array.get(s.hiB, n - 1), mid, txt, style = label.style_label_down, color = color(na), textcolor = cIT, size = sz)
+    array.push(s.hiP, p)
+    array.push(s.hiB, b)
+    if array.size(s.hiP) > 50
+        array.shift(s.hiP)
+        array.shift(s.hiB)
+    s.hi := Swing.new(p, b, false)
+    p
+
+// Register a new swing low. The previous swing is an ITL when it is lower than the swing before it and the new one.
+addLow(Structure s, float p, int b, bool showIT, string txt, string sz) =>
+    int n = array.size(s.loP)
+    if n >= 2
+        float mid  = array.get(s.loP, n - 1)
+        float prev = array.get(s.loP, n - 2)
+        if showIT and mid < prev and mid < p
+            label.new(array.get(s.loB, n - 1), mid, txt, style = label.style_label_up, color = color(na), textcolor = cIT, size = sz)
+    array.push(s.loP, p)
+    array.push(s.loB, b)
+    if array.size(s.loP) > 50
+        array.shift(s.loP)
+        array.shift(s.loB)
+    s.lo := Swing.new(p, b, false)
+    p
+
+// 1 = bullish BOS, 2 = bullish CHoCH, -1 = bearish BOS, -2 = bearish CHoCH, 0 = none. CHoCH when the break flips the trend.
+checkBreak(Structure s, bool show, string lstyle, string sz) =>
+    int res = 0
+    float up = brkMode == "Close" ? close : high
+    float dn = brkMode == "Close" ? close : low
+    if not na(s.hi.price) and not s.hi.broken and up > s.hi.price
+        s.hi.broken := true
+        bool choch = s.trend == -1
+        string tag = choch ? "CHoCH" : "BOS"
+        s.trend := 1
+        res := choch ? 2 : 1
+        if show
+            line.new(s.hi.bar, s.hi.price, bar_index, s.hi.price, color = cBull, style = lstyle)
+            label.new(math.round((s.hi.bar + bar_index) / 2), s.hi.price, tag, style = label.style_label_down, color = color(na), textcolor = cBull, size = sz)
+    else if not na(s.lo.price) and not s.lo.broken and dn < s.lo.price
+        s.lo.broken := true
+        bool choch = s.trend == 1
+        string tag = choch ? "CHoCH" : "BOS"
+        s.trend := -1
+        res := choch ? -2 : -1
+        if show
+            line.new(s.lo.bar, s.lo.price, bar_index, s.lo.price, color = cBear, style = lstyle)
+            label.new(math.round((s.lo.bar + bar_index) / 2), s.lo.price, tag, style = label.style_label_up, color = color(na), textcolor = cBear, size = sz)
+    res
+
+// Price of the latest swing that formed before a given bar
+lastSwingBefore(array<float> P, array<int> B, int beforeBar) =>
+    float res = na
+    int n = array.size(P)
+    if n > 0
+        for i = n - 1 to 0
+            if array.get(B, i) < beforeBar
+                res := array.get(P, i)
+                break
+    res
+
+// Lowest low (wantLow) or highest high of the candles after fromBar, up to now
+extremeSince(int fromBar, bool wantLow) =>
+    int len = math.min(bar_index - fromBar - 1, 1500)
+    float res = na
+    if len >= 0
+        res := wantLow ? low : high
+        for i = 0 to len
+            res := wantLow ? math.min(res, low[i]) : math.max(res, high[i])
+    res
+
+// Offset of the last up-close (wantUp) or down-close candle at or before fromBar
+blockCandle(int fromBar, bool wantUp) =>
+    int off0 = bar_index - fromBar
+    int found = na
+    if off0 >= 0 and off0 + blkSearch <= 1500
+        for i = off0 to off0 + blkSearch
+            bool ok = wantUp ? close[i] > open[i] : close[i] < open[i]
+            if ok
+                found := i
+                break
+    found
+
+// Breaker vs mitigation block, created when structure breaks.
+// Bullish: the last up-close candle at the broken swing high. If the drop after that high swept the previous swing low -> Breaker, else (higher low) -> Mitigation block.
+// Bearish: mirror image (last down-close candle at the broken swing low; rally above the previous swing high -> Breaker, lower high -> Mitigation block).
+makeBlock(Structure s, int dir, array<Zone> zs) =>
+    if dir == 1
+        Swing h = s.hi
+        float before = lastSwingBefore(s.loP, s.loB, h.bar)
+        float after  = extremeSince(h.bar, true)
+        int off = blockCandle(h.bar, true)
+        if not na(off) and not na(before) and not na(after)
+            bool isBB = after < before
+            color c = isBB ? cBB : cMB
+            box b = box.new(bar_index - off, high[off], bar_index + 1, low[off], border_color = color.new(c, 30), bgcolor = c, text = isBB ? "Bull BB" : "Bull MB", text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right)
+            array.push(zs, Zone.new(b, high[off], low[off], 1, isBB ? 1 : 2, bar_index))
+    else if dir == -1
+        Swing l = s.lo
+        float before = lastSwingBefore(s.hiP, s.hiB, l.bar)
+        float after  = extremeSince(l.bar, false)
+        int off = blockCandle(l.bar, false)
+        if not na(off) and not na(before) and not na(after)
+            bool isBB = after > before
+            color c = isBB ? cBB : cMB
+            box b = box.new(bar_index - off, high[off], bar_index + 1, low[off], border_color = color.new(c, 30), bgcolor = c, text = isBB ? "Bear BB" : "Bear MB", text_color = color.new(c, 0), text_size = size.tiny, text_halign = text.align_right)
+            array.push(zs, Zone.new(b, high[off], low[off], -1, isBB ? 1 : 2, bar_index))
+    true
+
+// Extend live zones; finish FVGs when filled and blocks when a candle closes through them
+updateZones(array<Zone> zs, bool keep) =>
+    int n = array.size(zs)
+    if n > 0
+        for i = n - 1 to 0
+            Zone z = array.get(zs, i)
+            if z.born == bar_index
+                continue
+            bool dead = false
+            if z.kind == 0
+                float mid = (z.top + z.bottom) / 2
+                float lvl = fvgMit == "Touches" ? (z.dir == 1 ? z.top : z.bottom) : fvgMit == "Reaches 50%" ? mid : (z.dir == 1 ? z.bottom : z.top)
+                dead := z.dir == 1 ? low <= lvl : high >= lvl
+            else
+                dead := z.dir == 1 ? close < z.bottom : close > z.top
+            if dead
+                if keep
+                    box.set_right(z.bx, bar_index)
+                    box.set_bgcolor(z.bx, color.new(color.gray, 88))
+                    box.set_border_color(z.bx, color.new(color.gray, 70))
+                else
+                    box.delete(z.bx)
+                array.remove(zs, i)
+            else
+                box.set_right(z.bx, bar_index + 1)
+    true
+
+// Extend liquidity levels until price trades through them. Returns [buy-side taken, sell-side taken].
+updatePools(array<Pool> ps) =>
+    bool bTaken = false
+    bool sTaken = false
+    int n = array.size(ps)
+    if n > 0
+        for i = n - 1 to 0
+            Pool p = array.get(ps, i)
+            if p.born == bar_index
+                continue
+            bool hit = p.dir == 1 ? high > p.price : low < p.price
+            if hit
+                line.set_x2(p.ln, bar_index)
+                bool closedBack = p.dir == 1 ? close < p.price : close > p.price
+                if closedBack
+                    label.new(bar_index, p.price, "sweep", style = p.dir == 1 ? label.style_label_down : label.style_label_up, color = color(na), textcolor = cLiq, size = size.tiny)
+                if p.dir == 1
+                    bTaken := true
+                else
+                    sTaken := true
+                if keepSwept
+                    line.set_color(p.ln, color.new(cLiq, 60))
+                    line.set_style(p.ln, line.style_dotted)
+                else
+                    line.delete(p.ln)
+                array.remove(ps, i)
+            else
+                line.set_x2(p.ln, bar_index)
+    [bTaken, sTaken]
+
+// New higher-timeframe point of interest
+addPoi(array<Poi> ps, int dir, float top, float bot, int tLeft, string kind) =>
+    box b = na
+    if showPoi
+        color c = dir == 1 ? cPoiUp : cPoiDn
+        b := box.new(tLeft, top, time, bot, xloc = xloc.bar_time, border_color = color.new(c, 40), bgcolor = c, text = kind, text_size = size.tiny, text_color = color.new(c, 0), text_halign = text.align_left, text_valign = text.align_top)
+    array.push(ps, Poi.new(bx = b, top = top, bottom = bot, dir = dir, bornTime = time, kind = kind))
+    if array.size(ps) > poiMax
+        Poi old = array.shift(ps)
+        if showPoi
+            box.set_right(old.bx, time)
+    true
+
+// Draw entry / stop / target and start tracking the trade
+openTrade(array<Trade> ts, Stats st, int dir, float entry, float sl, float tp, string kind) =>
+    line le = line.new(bar_index, entry, bar_index + 1, entry, color = color.new(#2962FF, 0), width = 2)
+    line ls = line.new(bar_index, sl, bar_index + 1, sl, color = cBear, style = line.style_dashed)
+    line lt = line.new(bar_index, tp, bar_index + 1, tp, color = cBull, style = line.style_dashed)
+    string txt = (dir == 1 ? "BUY " : "SELL ") + kind + "\nE " + str.tostring(entry, format.mintick) + "  SL " + str.tostring(sl, format.mintick) + "  TP " + str.tostring(tp, format.mintick)
+    label lb = label.new(bar_index, sl, txt, style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? cBull : cBear, textcolor = color.white, size = size.small)
+    array.push(ts, Trade.new(dir, entry, sl, tp, bar_index, le, ls, lt, lb))
+    st.trades := st.trades + 1
+    alert(txt + " on " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar_close)
+    true
+
+// Close trades at target or stop (stop first if both are hit in one candle)
+updateTrades(array<Trade> ts, Stats st) =>
+    int n = array.size(ts)
+    if n > 0
+        for i = n - 1 to 0
+            Trade t = array.get(ts, i)
+            if t.bar == bar_index
+                continue
+            bool hitSl = t.dir == 1 ? low <= t.sl : high >= t.sl
+            bool hitTp = t.dir == 1 ? high >= t.tp : low <= t.tp
+            if hitSl or hitTp
+                bool win = hitTp and not hitSl
+                st.netR := st.netR + (win ? rrTp : -1.0)
+                if win
+                    st.wins := st.wins + 1
+                else
+                    st.losses := st.losses + 1
+                line.set_x2(t.le, bar_index)
+                line.set_x2(t.ls, bar_index)
+                line.set_x2(t.lt, bar_index)
+                label.set_text(t.lb, label.get_text(t.lb) + (win ? "\nTP hit" : "\nSL hit"))
+                array.remove(ts, i)
+            else
+                line.set_x2(t.le, bar_index + 1)
+                line.set_x2(t.ls, bar_index + 1)
+                line.set_x2(t.lt, bar_index + 1)
+    true
+
+// POI life cycle: wait for price to enter -> wait for a chart-timeframe break in the POI direction -> entry
+processPois(array<Poi> ps, array<Trade> ts, Stats st, int iRes, int eRes, float a) =>
+    int n = array.size(ps)
+    if n > 0
+        for i = n - 1 to 0
+            Poi p = array.get(ps, i)
+            bool kill = false
+            bool done = false
+            if time - p.bornTime > poiLife * timeframe.in_seconds(poiTf) * 1000
+                kill := true
+            else if (p.dir == 1 ? close < p.bottom : close > p.top)
+                kill := true
+            else
+                if p.state == 0
+                    bool touched = p.dir == 1 ? low <= p.top : high >= p.bottom
+                    if touched
+                        p.state := 1
+                        p.touchBar := bar_index
+                        p.ext := p.dir == 1 ? low : high
+                if p.state == 1
+                    p.ext := p.dir == 1 ? math.min(p.ext, low) : math.max(p.ext, high)
+                    int r = confStruct == "External" ? eRes : iRes
+                    bool conf = confirmMode == "CHoCH only" ? r == 2 * p.dir : (r == p.dir or r == 2 * p.dir)
+                    if conf
+                        float sl = stopMode == "POI far edge" ? (p.dir == 1 ? p.bottom - slBuf * a : p.top + slBuf * a) : p.ext - p.dir * slBuf * a
+                        int fvgBar = p.dir == 1 ? lastBullBar : lastBearBar
+                        float fvgLvl = p.dir == 1 ? lastBullTop : lastBearBot
+                        bool useFvg = entryMode == "LTF FVG retest" and not na(fvgBar) and fvgBar >= p.touchBar and p.dir * (fvgLvl - sl) > 0 and p.dir * (close - fvgLvl) > 0
+                        if useFvg
+                            p.entry := fvgLvl
+                            p.sl := sl
+                            p.tp := fvgLvl + p.dir * rrTp * math.abs(fvgLvl - sl)
+                            p.pendBar := bar_index
+                            p.state := 2
+                        else
+                            if p.dir * (close - sl) > 0
+                                openTrade(ts, st, p.dir, close, sl, close + p.dir * rrTp * math.abs(close - sl), p.kind)
+                            done := true
+                else if p.state == 2 and p.pendBar != bar_index
+                    bool filled = p.dir == 1 ? low <= p.entry : high >= p.entry
+                    if filled
+                        openTrade(ts, st, p.dir, p.entry, p.sl, p.tp, p.kind)
+                        done := true
+                    else if (p.dir == 1 ? high >= p.tp or close < p.sl : low <= p.tp or close > p.sl) or bar_index - p.pendBar > pendMax
+                        done := true
+            if kill or done
+                if showPoi
+                    box.set_right(p.bx, time)
+                    if kill
+                        box.set_bgcolor(p.bx, color.new(color.gray, 90))
+                        box.set_border_color(p.bx, color.new(color.gray, 75))
+                array.remove(ps, i)
+            else if showPoi
+                box.set_right(p.bx, time)
+    true
+
+// =====================================================================
+// State
+// =====================================================================
+var Structure sInt = newStructure()
+var Structure sExt = newStructure()
+var array<Zone> fvgs   = array.new<Zone>()
+var array<Zone> blocks = array.new<Zone>()
+var array<Pool> pools  = array.new<Pool>()
+var array<Poi>   pois   = array.new<Poi>()
+var array<Trade> trades = array.new<Trade>()
+var Stats        stats  = Stats.new()
+
+atr = ta.atr(14)
+iph = ta.pivothigh(high, intLen, intLen)
+ipl = ta.pivotlow(low, intLen, intLen)
+eph = ta.pivothigh(high, extLen, extLen)
+epl = ta.pivotlow(low, extLen, extLen)
+
+// =====================================================================
+// 1. Fair value gaps (every 3-candle gap)
+// =====================================================================
+bool newBullFvg = low > high[2] and (low - high[2]) >= fvgMin * atr
+bool newBearFvg = high < low[2] and (low[2] - high) >= fvgMin * atr
+if newBullFvg
+    lastBullTop := low
+    lastBullBar := bar_index
+if newBearFvg
+    lastBearBot := high
+    lastBearBar := bar_index
+if showFvg and newBullFvg
+    box b = box.new(bar_index - 1, low, bar_index + 1, high[2], border_color = color.new(cFvgUp, 50), bgcolor = cFvgUp)
+    array.push(fvgs, Zone.new(b, low, high[2], 1, 0, bar_index))
+if showFvg and newBearFvg
+    box b = box.new(bar_index - 1, low[2], bar_index + 1, high, border_color = color.new(cFvgDn, 50), bgcolor = cFvgDn)
+    array.push(fvgs, Zone.new(b, low[2], high, -1, 0, bar_index))
+if array.size(fvgs) > fvgMax
+    Zone old = array.shift(fvgs)
+    box.set_right(old.bx, bar_index)
+
+// =====================================================================
+// 2. Swings: ITH / ITL, equal highs / lows, liquidity levels
+// =====================================================================
+if not na(iph)
+    int b = bar_index - intLen
+    if showEq and array.size(sInt.hiP) > 0
+        float prevP = array.last(sInt.hiP)
+        int prevB = array.last(sInt.hiB)
+        if math.abs(iph - prevP) <= eqThr * atr
+            line.new(prevB, prevP, b, iph, color = cLiq, style = line.style_dotted)
+            label.new(math.round((prevB + b) / 2), math.max(prevP, iph), "EQH", style = label.style_label_down, color = color(na), textcolor = cLiq, size = size.tiny)
+    addHigh(sInt, iph, b, showIntIT, "iTH", size.tiny)
+
+if not na(ipl)
+    int b = bar_index - intLen
+    if showEq and array.size(sInt.loP) > 0
+        float prevP = array.last(sInt.loP)
+        int prevB = array.last(sInt.loB)
+        if math.abs(ipl - prevP) <= eqThr * atr
+            line.new(prevB, prevP, b, ipl, color = cLiq, style = line.style_dotted)
+            label.new(math.round((prevB + b) / 2), math.min(prevP, ipl), "EQL", style = label.style_label_up, color = color(na), textcolor = cLiq, size = size.tiny)
+    addLow(sInt, ipl, b, showIntIT, "iTL", size.tiny)
+
+if not na(eph)
+    addHigh(sExt, eph, bar_index - extLen, showExtIT, "ITH", size.small)
+    if showPools
+        array.push(pools, Pool.new(line.new(bar_index - extLen, eph, bar_index, eph, color = cLiq, style = line.style_dashed), eph, 1, bar_index))
+
+if not na(epl)
+    addLow(sExt, epl, bar_index - extLen, showExtIT, "ITL", size.small)
+    if showPools
+        array.push(pools, Pool.new(line.new(bar_index - extLen, epl, bar_index, epl, color = cLiq, style = line.style_dashed), epl, -1, bar_index))
+
+if array.size(pools) > 2 * poolMax
+    Pool oldP = array.shift(pools)
+    line.set_x2(oldP.ln, bar_index)
+
+// =====================================================================
+// 3. BOS / CHoCH (internal + external) and breaker / mitigation blocks
+// =====================================================================
+int intRes = checkBreak(sInt, showIntS, line.style_dashed, size.tiny)
+int extRes = checkBreak(sExt, showExtS, line.style_solid, size.small)
+
+if showBlk
+    if blkSrc == "Internal" and intRes != 0
+        makeBlock(sInt, intRes > 0 ? 1 : -1, blocks)
+    if blkSrc == "External" and extRes != 0
+        makeBlock(sExt, extRes > 0 ? 1 : -1, blocks)
+if array.size(blocks) > blkMax
+    Zone oldB = array.shift(blocks)
+    box.set_right(oldB.bx, bar_index)
+
+// =====================================================================
+// 4. Update live zones and levels
+// =====================================================================
+updateZones(fvgs, fvgKeep)
+updateZones(blocks, blkKeep)
+[buyTaken, sellTaken] = updatePools(pools)
+
+// Previous day high / low
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+plot(showPD ? pdh : na, "PDH", color = cLiq, style = plot.style_stepline)
+plot(showPD ? pdl : na, "PDL", color = cLiq, style = plot.style_stepline)
+
+// =====================================================================
+// 5. Higher-timeframe POI -> chart-timeframe entry
+// =====================================================================
+// values of the last CLOSED candle of the POI timeframe (no repainting)
+[hBullF, hBearF, hObBull, hObBear, cLo, cHi, aLo, aHi, tA, tC, hAtr] = request.security(syminfo.tickerid, poiTf, [low[1] > high[3], high[1] < low[3], low[1] > high[3] and close[3] < open[3], high[1] < low[3] and close[3] > open[3], low[1], high[1], low[3], high[3], time[3], time[1], ta.atr(14)[1]], lookahead = barmerge.lookahead_on)
+bool newHtf = ta.change(tC) != 0
+if useEntry and newHtf
+    float minGap = poiMinGap * nz(hAtr)
+    if hBullF and (cLo - aHi) >= minGap
+        if poiType != "OB + FVG"
+            addPoi(pois, 1, cLo, aHi, tA, "POI FVG")
+        if poiType != "FVG" and hObBull
+            addPoi(pois, 1, aHi, aLo, tA, "POI OB")
+    if hBearF and (aLo - cHi) >= minGap
+        if poiType != "OB + FVG"
+            addPoi(pois, -1, aLo, cHi, tA, "POI FVG")
+        if poiType != "FVG" and hObBear
+            addPoi(pois, -1, aHi, aLo, tA, "POI OB")
+if useEntry
+    processPois(pois, trades, stats, intRes, extRes, atr)
+    updateTrades(trades, stats)
+
+var int firstTime = time
+var table tb = table.new(position.top_right, 2, 7, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast and useEntry and showStats
+    int closed = stats.wins + stats.losses
+    bool badTf = timeframe.in_seconds() >= timeframe.in_seconds(poiTf)
+    table.cell(tb, 0, 0, "POI " + poiTf + " / entry " + timeframe.period, text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, badTf ? "use a lower chart TF" : poiType, text_color = badTf ? color.orange : color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Trades", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(stats.trades), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Wins / losses", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, str.tostring(stats.wins) + " / " + str.tostring(stats.losses), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Win rate", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 3, closed > 0 ? str.tostring(100.0 * stats.wins / closed, "#.0") + "%" : "-", text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 4, "Net R (" + str.tostring(rrTp) + "R target)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 4, str.tostring(stats.netR, "#.0") + "R", text_color = stats.netR >= 0 ? cBull : cBear, text_size = size.small)
+    table.cell(tb, 0, 5, "Open trades", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 5, str.tostring(array.size(trades)), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 6, "Since", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 6, str.format_time(firstTime, "yyyy-MM-dd", syminfo.timezone), text_color = color.white, text_size = size.small)
+
+// =====================================================================
+// Alerts
+// =====================================================================
+alertcondition(extRes > 0, "External bullish BOS/CHoCH", "External bullish structure break on {{ticker}} {{interval}}")
+alertcondition(extRes < 0, "External bearish BOS/CHoCH", "External bearish structure break on {{ticker}} {{interval}}")
+alertcondition(intRes > 0, "Internal bullish BOS/CHoCH", "Internal bullish structure break on {{ticker}} {{interval}}")
+alertcondition(intRes < 0, "Internal bearish BOS/CHoCH", "Internal bearish structure break on {{ticker}} {{interval}}")
+alertcondition(newBullFvg, "Bullish FVG", "New bullish FVG on {{ticker}} {{interval}}")
+alertcondition(newBearFvg, "Bearish FVG", "New bearish FVG on {{ticker}} {{interval}}")
+alertcondition(buyTaken, "Buy-side liquidity taken", "Buy-side liquidity taken on {{ticker}} {{interval}}")
+alertcondition(sellTaken, "Sell-side liquidity taken", "Sell-side liquidity taken on {{ticker}} {{interval}}")
+alertcondition(ta.change(stats.trades) > 0, "POI entry", "New HTF POI entry on {{ticker}} {{interval}}")
