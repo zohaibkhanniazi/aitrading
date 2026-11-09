@@ -5,6 +5,8 @@
 //     without taking its LOW -> valid pullback. (Taking the low, or both, = not valid.)
 // 4 = a candle closes below candle 2's low -> SELL.
 // Cancelled if a candle closes above the pullback high, or after N candles. Newest valid pullback wins.
+// Trade (same as the MT5 bot strategies/indep_pb): entry = close of candle 4 (bot: next open),
+//   stop = pullback high (highest high from candle 3 to candle 4), target = RR x stop distance.
 //@version=5
 indicator("Independent Candle Pullback (red scenario)", shorttitle = "Indep PB", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
 
@@ -15,6 +17,28 @@ expiry       = input.int(30, "Valid pullback expires after (candles)", minval = 
 showLines    = input.bool(true, "Lines: candle 2 low and pullback high")
 cInd         = input.color(#2962FF, "Independent candle (1)")
 cSell        = input.color(#F23645, "Pullback / sell colour")
+rr           = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = "Trade")
+showTrades   = input.bool(true, "Draw entry / stop / target", group = "Trade")
+showStats    = input.bool(true, "Results table", group = "Trade")
+
+type Trade
+    float entry
+    float sl
+    float tp
+    int   bar
+    line  le
+    line  ls
+    line  lt
+    label lb
+
+type Stats
+    int   trades = 0
+    int   wins = 0
+    int   losses = 0
+    float netR = 0.0
+
+var array<Trade> trades = array.new<Trade>()
+var Stats stats = Stats.new()
 
 // ---------- current independent (reference) candle
 var float refH   = na
@@ -49,7 +73,18 @@ if vAct
         if showLines
             line.set_x2(lnLow, bar_index)
             line.set_x2(lnHigh, bar_index)
-        label.new(bar_index, high, "4\nSELL", style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+        float e  = close
+        float sl = math.max(vHigh, high)
+        float tp = e - rr * (sl - e)
+        string txt = "4 SELL\nEntry " + str.tostring(e, format.mintick) + "\nSL " + str.tostring(sl, format.mintick) + "  (pullback high)\nTP " + str.tostring(tp, format.mintick) + "  (" + str.tostring(rr) + "R)"
+        label lb = label.new(bar_index, sl, txt, style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+        if showTrades and sl > e
+            line le = line.new(bar_index, e, bar_index + 1, e, color = color.new(#2962FF, 0), width = 2)
+            line ls = line.new(bar_index, sl, bar_index + 1, sl, color = cSell, width = 2)
+            line lt = line.new(bar_index, tp, bar_index + 1, tp, color = color.new(#089981, 0), width = 2)
+            array.push(trades, Trade.new(e, sl, tp, bar_index, le, ls, lt, lb))
+            stats.trades := stats.trades + 1
+        alert("SELL " + syminfo.ticker + " " + timeframe.period + "  entry " + str.tostring(e, format.mintick) + "  SL " + str.tostring(sl, format.mintick) + "  TP " + str.tostring(tp, format.mintick), alert.freq_once_per_bar_close)
     else if close > vHigh or bar_index - vBar3 > expiry
         vAct := false
         if showLines
@@ -104,6 +139,46 @@ if not inside
     refH   := high
     refL   := low
     refBar := bar_index
+
+// C. follow open trades until the stop or target is hit (stop first if both in one candle)
+if array.size(trades) > 0
+    for i = array.size(trades) - 1 to 0
+        Trade t = array.get(trades, i)
+        if t.bar == bar_index
+            continue
+        bool hitSl = high >= t.sl
+        bool hitTp = low <= t.tp
+        if hitSl or hitTp
+            bool win = hitTp and not hitSl
+            stats.netR := stats.netR + (win ? rr : -1.0)
+            if win
+                stats.wins := stats.wins + 1
+            else
+                stats.losses := stats.losses + 1
+            line.set_x2(t.le, bar_index)
+            line.set_x2(t.ls, bar_index)
+            line.set_x2(t.lt, bar_index)
+            label.set_text(t.lb, label.get_text(t.lb) + (win ? "\nRESULT: TP hit +" + str.tostring(rr) + "R" : "\nRESULT: SL hit -1R"))
+            array.remove(trades, i)
+        else
+            line.set_x2(t.le, bar_index + 1)
+            line.set_x2(t.ls, bar_index + 1)
+            line.set_x2(t.lt, bar_index + 1)
+
+var int firstTime = time
+var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast and showStats
+    int closed = stats.wins + stats.losses
+    table.cell(tb, 0, 0, "Sells", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, str.tostring(stats.trades), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Wins / losses", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(stats.wins) + " / " + str.tostring(stats.losses), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Win rate", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, closed > 0 ? str.tostring(100.0 * stats.wins / closed, "#.0") + "%" : "-", text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Net R (" + str.tostring(rr) + "R target)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 3, str.tostring(stats.netR, "#.0") + "R", text_color = stats.netR >= 0 ? color.new(#089981, 0) : cSell, text_size = size.small)
+    table.cell(tb, 0, 4, "Since", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 4, str.format_time(firstTime, "yyyy-MM-dd HH:mm", syminfo.timezone), text_color = color.white, text_size = size.small)
 
 barcolor(greyInside and inside ? color.new(color.gray, 30) : na)
 plotshape(sell, "Sell", shape.triangledown, location.abovebar, cSell, size = size.tiny)
