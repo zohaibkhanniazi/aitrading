@@ -4,7 +4,7 @@
 //       sweep high. A newer sweep replaces the older setup (latest scenario only).
 // BUY : mirror image (a red candle takes a green candle's low, then a close above that green candle).
 //@version=5
-indicator("Sweep & Close-Through (latest setup)", shorttitle = "Sweep CT", overlay = true, max_lines_count = 500, max_labels_count = 500)
+indicator("Sweep & Close-Through (latest setup)", shorttitle = "Sweep CT", overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
 
 G1 = "Pattern"
 lookback  = input.int(3, "Look for the red/green candle within (candles before the sweep)", minval = 1, maxval = 20, group = G1)
