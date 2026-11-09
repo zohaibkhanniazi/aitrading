@@ -1,0 +1,80 @@
+// Sell Setup 1H (owner's confirmed rules) -- part of zohaibkhanniazi/aitrading
+// 1. Independent candle = not inside the last independent candle (own high or low). Inside candles are ignored.
+// 2. R = newest independent RED candle.
+// 3. Valid pullback = a later GREEN candle takes R's high (wick or close above) WITHOUT going below R's low.
+//    If price takes R's low first, or both sides at once, R is finished (no pullback).
+// 4. SELL = a candle closes below R's low.
+// 5. No cancel: a close above the sweep high does not cancel; keep waiting for the close below.
+// 6. Several valid pullbacks can wait at once (newest = main). A close below several lows triggers all of them.
+//@version=5
+indicator("Sell Setup 1H (pullback sweep + close below)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+greyInside = input.bool(true, "Grey out inside candles (ignored)")
+maxActive  = input.int(20, "Max setups waiting at once (oldest dropped)", minval = 1, maxval = 100)
+cSell      = input.color(#F23645, "Sell colour")
+cGreen     = input.color(#089981, "Sweep colour")
+
+type Setup
+    float lvl
+    int   rBar
+    line  ln
+
+var array<Setup> setups = array.new<Setup>()
+
+// current independent (reference) candle
+var float refH = na
+var float refL = na
+bool inside = not na(refH) and high <= refH and low >= refL
+
+// newest independent red candle (R) waiting for its pullback
+var bool  cAct = false
+var float cH   = na
+var float cL   = na
+var int   cBar = na
+
+// 1. waiting setups: a close below R's low -> SELL (every setup it closes below)
+int nTrig = 0
+if array.size(setups) > 0
+    for i = array.size(setups) - 1 to 0
+        Setup st = array.get(setups, i)
+        line.set_x2(st.ln, bar_index)
+        if close < st.lvl
+            line.set_color(st.ln, cSell)
+            line.set_style(st.ln, line.style_solid)
+            nTrig += 1
+            array.remove(setups, i)
+bool sellNow = nTrig > 0
+if sellNow
+    label.new(bar_index, high, nTrig > 1 ? "SELL (" + str.tostring(nTrig) + " setups)" : "SELL", style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+
+// 2. the pattern is built only from independent candles
+if not inside
+    if cAct
+        bool tH = high > cH
+        bool tL = low < cL
+        if tH and not tL and close > open
+            // valid pullback on R
+            box.new(cBar, cH, bar_index, cL, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85))
+            label.new(cBar, cL, "R", style = label.style_label_up, color = cSell, textcolor = color.white, size = size.small)
+            label.new(bar_index, high, close > cH ? "close above" : "sweep", style = label.style_label_down, color = cGreen, textcolor = color.white, size = size.tiny)
+            line ln = line.new(cBar, cL, bar_index, cL, color = color.new(cSell, 20), style = line.style_dashed, width = 2)
+            array.push(setups, Setup.new(cL, cBar, ln))
+            if array.size(setups) > maxActive
+                Setup old = array.shift(setups)
+                line.set_color(old.ln, color.new(color.gray, 50))
+            cAct := false
+        else if tL
+            // R's low taken first (or both sides): R is finished
+            cAct := false
+    // newest independent red candle becomes R
+    if close < open
+        cAct := true
+        cH   := high
+        cL   := low
+        cBar := bar_index
+    refH := high
+    refL := low
+
+barcolor(greyInside and inside ? color.new(color.gray, 30) : na)
+plotshape(sellNow, "Sell", shape.triangledown, location.abovebar, cSell, size = size.tiny)
+alertcondition(sellNow, "Sell setup (close below R)", "Sell setup on {{ticker}} {{interval}}: close below the pullback candle's low")
