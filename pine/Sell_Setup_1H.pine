@@ -12,8 +12,10 @@
 //   - CC  = the lower-chart candle inside BC that closes below R's low (the exact break),
 //   - NCC = the first candle after CC that comes back up and tests CC's breaker point (R's low).
 //           If the next candle does not test it, the following one is checked, and so on.
-//           Horizontal lines at the NCC high and low, from NCC until NCCLT.
-//   - NCCLT = the first candle (any colour) after NCC, formed AFTER the BC hour, whose high goes above the NCC high.
+//   - Liquidity = the highest high of the swing NCC belongs to: from NCC, keep the highest high until
+//           N candle(s) in a row fail to make a higher high. Lines: liquidity (upper) and NCC low (lower),
+//           drawn until NCCLT.
+//   - NCCLT = the first candle (any colour), formed AFTER the BC hour, whose high goes above that liquidity.
 //   - SELL  = the first candle after NCCLT that closes (body) below the NCCLT low. Entry = its close,
 //             SL = NCCLT high, TP = RR x risk. Results are tracked in a table.
 //   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
@@ -28,7 +30,8 @@ cGreen     = input.color(#089981, "Sweep colour")
 showCC     = input.bool(true, "Lower chart: mark CC (exact break candle) and NCC (next candle) with lines")
 ccMode     = input.string("Close below", "CC = first candle that", options = ["Close below", "Trades below (wick)"], tooltip = "...the level of R's low (the 1H level BC closed below)")
 nccTol     = input.float(0.0, "NCC test tolerance (price below the breaker point that still counts)", minval = 0, step = 0.1)
-nccMax     = input.int(200, "Stop looking for NCC after (candles after CC)", minval = 1, maxval = 2000)
+nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minval = 1, maxval = 2000)
+swingConf  = input.int(1, "Liquidity swing high confirmed after (candles without a higher high)", minval = 1, maxval = 10)
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
 rrE        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = "Trade")
@@ -199,10 +202,13 @@ bool otherBc = newSetupBar and bcN > 0
 // every BC block follows its own chain, so all labels stay on the chart
 type Block
     float lvl      // breaker point = R's low
-    int   stage    // 0 = wait NCC, 1 = wait NCCLT, 2 = wait SELL, 3 = finished
+    int   stage    // 0 = wait NCC, 1 = build NCC swing, 2 = wait NCCLT, 3 = wait SELL, 4 = finished
     int   ccBar
-    float ncH
+    int   ncBar
     float ncL
+    float swH      // liquidity = highest high of the NCC swing
+    int   swBar
+    int   conf
     line  lnH
     line  lnL
     float ltH
@@ -217,28 +223,41 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     if b.stage == 0
         // NCC: first candle after CC that comes back up and tests the breaker point
         if high[off] >= b.lvl - nccTol
-            b.ncH   := high[off]
+            b.ncBar := x
             b.ncL   := low[off]
-            b.lnH   := line.new(x, high[off], x, high[off], color = cCC, width = 2)
-            b.lnL   := line.new(x, low[off], x, low[off], color = cCC, width = 2)
+            b.swH   := high[off]
+            b.swBar := x
+            b.conf  := 0
             label.new(x, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
             b.stage := 1
     else if b.stage == 1
-        // NCCLT: first candle OUTSIDE the BC hour that takes the NCC high; the NCC lines stop here
+        // NCC swing: keep the highest high until swingConf candle(s) in a row make no higher high
+        if high[off] > b.swH
+            b.swH   := high[off]
+            b.swBar := x
+            b.conf  := 0
+        else
+            b.conf  := b.conf + 1
+            if b.conf >= swingConf
+                b.lnH   := line.new(b.swBar, b.swH, x, b.swH, color = cCC, width = 2)
+                b.lnL   := line.new(b.ncBar, b.ncL, x, b.ncL, color = cCC, width = 2)
+                b.stage := 2
+    else if b.stage == 2
+        // NCCLT: first candle after the BC hour that takes the liquidity; the lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)
-        if high[off] > b.ncH and time[off] >= b.endT
+        if high[off] > b.swH and time[off] >= b.endT
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT, textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]
             b.ltL   := low[off]
-            b.stage := 2
-    else if b.stage == 2
+            b.stage := 3
+    else if b.stage == 3
         // SELL: first candle that closes below the NCCLT low; SL = NCCLT high
         if close[off] < b.ltL
             openTradeAt(ts, st, off, b.ltH)
-            b.stage := 3
-    if b.stage < 3 and x - b.ccBar > nccMax
-        b.stage := 3
+            b.stage := 4
+    if b.stage < 4 and x - b.ccBar > nccMax
+        b.stage := 4
     true
 
 // 1. blocks already running: the candle that just closed
@@ -246,7 +265,7 @@ if lowerTf and array.size(blocks) > 0
     for i = array.size(blocks) - 1 to 0
         Block bk = array.get(blocks, i)
         stepBlock(bk, 1, trades, stats)
-        if bk.stage >= 3
+        if bk.stage >= 4
             array.remove(blocks, i)
 
 // 2. a new BC: box, CC, then catch up on the candles that already closed after CC
@@ -271,9 +290,9 @@ if lowerTf and otherBc
             if cc >= 2
                 for o = cc - 1 to 1
                     stepBlock(nb, o, trades, stats)
-                    if nb.stage >= 3
+                    if nb.stage >= 4
                         break
-            if nb.stage < 3
+            if nb.stage < 4
                 array.push(blocks, nb)
                 if array.size(blocks) > 30
                     array.shift(blocks)
