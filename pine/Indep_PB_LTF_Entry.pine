@@ -28,20 +28,34 @@ rr        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, gr
 slBuf     = input.float(0.0, "Stop buffer above the sweep high (price)", minval = 0, step = 0.1, group = G2)
 showStats = input.bool(true, "Results table", group = G2)
 cSell     = input.color(#F23645, "Sell colour", group = G2)
+cInd      = input.color(#2962FF, "Independent candle (1)", group = G2)
 
 // ---------------------------------------------------------------- H1 pattern (runs on the setup timeframe)
 htfLogic() =>
     var float refH  = na
     var float refL  = na
+    var int   refT  = na
     var bool  cAct  = false
     var float cH    = na
     var float cL    = na
+    var int   cT    = na
+    var int   mT    = na
+    var float mH    = na
+    var float mL    = na
     var bool  vAct  = false
     var float vLow  = na
     var float vHigh = na
     var int   vAge  = 0
+    // snapshot of candles 1 and 2 for drawing the valid pullback
+    var int   dMT = na
+    var float dMH = na
+    var float dML = na
+    var int   dCT = na
+    var float dCH = na
+    var float dCL = na
     bool  inside = not na(refH) and high <= refH and low >= refL
     bool  sig    = false
+    bool  vNew   = false
     float lvl    = na
     float pb     = na
     if vAct
@@ -62,19 +76,50 @@ htfLogic() =>
                 vLow  := cL
                 vHigh := high
                 vAge  := 0
+                vNew  := true
+                dMT := mT
+                dMH := mH
+                dML := mL
+                dCT := cT
+                dCH := cH
+                dCL := cL
             cAct := false
         if close < open and not na(refH) and (not needLowBreak or low < refL)
             cAct := true
             cH   := high
             cL   := low
+            cT   := time
+            mT   := refT
+            mH   := refH
+            mL   := refL
         refH := high
         refL := low
+        refT := time
     // values of the last CLOSED setup candle (no repainting)
-    [sig[1], lvl[1], pb[1], high[1], time[1]]
+    [sig[1], lvl[1], pb[1], high[1], low[1], time[1], vNew[1], dMT[1], dMH[1], dML[1], dCT[1], dCH[1], dCL[1]]
 
-[hSig, hLvl, hPB, h4High, h4Time] = request.security(syminfo.tickerid, htf, htfLogic(), lookahead = barmerge.lookahead_on)
+[hSig, hLvl, hPB, h4High, h4Low, h4Time, hVNew, hMT, hMH, hML, hCT, hCH, hCL] = request.security(syminfo.tickerid, htf, htfLogic(), lookahead = barmerge.lookahead_on)
 bool tfOk = timeframe.in_seconds() < timeframe.in_seconds(htf)
 bool newSetup = tfOk and hSig and ta.change(h4Time) != 0
+
+// ---------------------------------------------------------------- draw the setup-timeframe pattern (1-2-3, then 4)
+bool newHtfBar = ta.change(h4Time) != 0
+int  dur = timeframe.in_seconds(htf) * 1000
+var line lnH1 = na
+if newHtfBar and hVNew
+    box.new(hMT, hMH, hCT, hML, xloc = xloc.bar_time, border_color = cInd, border_width = 2, bgcolor = color.new(cInd, 85))
+    label.new(hMT, hML, "1", xloc = xloc.bar_time, style = label.style_label_up, color = cInd, textcolor = color.white, size = size.small)
+    box.new(hCT, hCH, hCT + dur, hCL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85))
+    label.new(hCT, hCL, "2", xloc = xloc.bar_time, style = label.style_label_up, color = cSell, textcolor = color.white, size = size.small)
+    box.new(h4Time, h4High, h4Time + dur, h4Low, xloc = xloc.bar_time, border_color = color.new(#089981, 0), border_width = 2, bgcolor = color.new(#089981, 85))
+    label.new(h4Time, h4High, "3  " + htf + " valid pullback", xloc = xloc.bar_time, style = label.style_label_down, color = #089981, textcolor = color.white, size = size.small)
+    lnH1 := line.new(hCT, hCL, time, hCL, xloc = xloc.bar_time, color = cSell, style = line.style_dashed, width = 2)
+if not na(lnH1)
+    line.set_x2(lnH1, time)
+if newHtfBar and hSig
+    box.new(h4Time, h4High, h4Time + dur, h4Low, xloc = xloc.bar_time, border_color = cSell, border_width = 3, bgcolor = color.new(cSell, 75))
+    label.new(h4Time + dur / 2, h4High, "4  " + htf + " close below 2 = SELL bias", xloc = xloc.bar_time, style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+    lnH1 := na
 
 // ---------------------------------------------------------------- trades + stats
 type Trade
@@ -154,7 +199,7 @@ if newSetup
     pbHigh := hPB
     lStart := bar_index
     sAct   := false
-    label.new(bar_index, high, skip ? "H1 setup skipped (no retest)" : "H1 sell setup", style = label.style_label_down, color = color.new(skip ? color.gray : cSell, 20), textcolor = color.white, size = size.tiny)
+    label.new(bar_index, high, skip ? "skipped: no retest above 2" : "now wait for 3m entry", style = label.style_label_down, color = color.new(skip ? color.gray : cSell, 20), textcolor = color.white, size = size.tiny)
     if not skip
         if not na(fOff)
             label.new(bar_index - fOff, p10, tag, style = label.style_label_down, color = color.new(#FF9800, 0), textcolor = color.white, size = size.tiny)
@@ -225,7 +270,7 @@ if array.size(trades) > 0
 var int firstTime = time
 var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
 if barstate.islast and not tfOk
-    table.cell(tb, 0, 0, "Open a chart BELOW " + htf + " (e.g. 3m). On this timeframe the entry part cannot work.", text_color = color.orange, text_size = size.normal)
+    table.cell(tb, 0, 0, "Showing the " + htf + " pattern (1-2-3-4) only. Open a 3m chart for the entries.", text_color = color.orange, text_size = size.normal)
 if barstate.islast and showStats and tfOk
     int closed = stats.wins + stats.losses
     table.cell(tb, 0, 0, "Sells (" + htf + " setup / " + timeframe.period + " entry)", text_color = color.white, text_size = size.small)
