@@ -1,0 +1,110 @@
+// Independent Candle Pullback (red / sell scenario) -- part of zohaibkhanniazi/aitrading
+// 1 = independent candle: has its own high and low. Candles inside its range are ignored.
+// 2 = red candle that comes out of candle 1 (closes beyond / takes its low) -> pullback candidate.
+// 3 = first candle that is not inside candle 2: takes candle 2's HIGH (sweep or close above)
+//     without taking its LOW -> valid pullback. (Taking the low, or both, = not valid.)
+// 4 = a candle closes below candle 2's low -> SELL.
+// Cancelled if a candle closes above the pullback high, or after N candles. Newest valid pullback wins.
+//@version=5
+indicator("Independent Candle Pullback (red scenario)", shorttitle = "Indep PB", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
+
+needLowBreak = input.bool(true, "Candle 2 must go below candle 1's low")
+needGreen    = input.bool(true, "Candle 3 must be green")
+greyInside   = input.bool(true, "Grey out inside candles (ignored)")
+expiry       = input.int(30, "Valid pullback expires after (candles)", minval = 1)
+showLines    = input.bool(true, "Lines: candle 2 low and pullback high")
+cInd         = input.color(#2962FF, "Independent candle (1)")
+cSell        = input.color(#F23645, "Pullback / sell colour")
+
+// ---------- current independent (reference) candle
+var float refH   = na
+var float refL   = na
+var int   refBar = na
+bool inside = not na(refH) and high <= refH and low >= refL
+
+// ---------- candidate candle 2 (red, out of candle 1)
+var bool  cAct = false
+var float cH   = na
+var float cL   = na
+var int   cBar = na
+var float mH   = na
+var float mL   = na
+var int   mBar = na
+
+// ---------- valid pullback waiting for candle 4
+var bool  vAct  = false
+var float vLow  = na
+var float vHigh = na
+var int   vBar3 = na
+var line  lnLow  = na
+var line  lnHigh = na
+
+bool sell = false
+
+// A. candle 4: close below candle 2's low (checked on every candle)
+if vAct
+    if close < vLow
+        sell := true
+        vAct := false
+        if showLines
+            line.set_x2(lnLow, bar_index)
+            line.set_x2(lnHigh, bar_index)
+        label.new(bar_index, high, "4\nSELL", style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+    else if close > vHigh or bar_index - vBar3 > expiry
+        vAct := false
+        if showLines
+            line.set_x2(lnLow, bar_index)
+            line.set_x2(lnHigh, bar_index)
+            line.set_color(lnLow, color.new(color.gray, 50))
+            line.set_color(lnHigh, color.new(color.gray, 50))
+    else
+        vHigh := math.max(vHigh, high)
+        if showLines
+            line.set_x2(lnLow, bar_index)
+            line.set_x2(lnHigh, bar_index)
+
+// B. only candles with their own high/low (not inside the independent candle) build the pattern
+if not inside
+    // candle 3: first candle out of candle 2
+    if cAct
+        bool tH = high > cH
+        bool tL = low < cL
+        if tH and not tL and (not needGreen or close > open)
+            // valid pullback -> replaces any older one (latest scenario)
+            if vAct and showLines
+                line.set_x2(lnLow, bar_index)
+                line.set_x2(lnHigh, bar_index)
+                line.set_color(lnLow, color.new(color.gray, 50))
+                line.set_color(lnHigh, color.new(color.gray, 50))
+            vAct  := true
+            vLow  := cL
+            vHigh := high
+            vBar3 := bar_index
+            box.new(mBar, mH, mBar, mL, border_color = cInd, border_width = 2, bgcolor = color.new(cInd, 60))
+            line.new(mBar, mH, cBar, mH, color = color.new(cInd, 30))
+            line.new(mBar, mL, cBar, mL, color = color.new(cInd, 30))
+            label.new(mBar, mL, "1", style = label.style_label_up, color = color(na), textcolor = cInd, size = size.normal)
+            box.new(cBar, cH, cBar, cL, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 70))
+            label.new(cBar, cL, "2", style = label.style_label_up, color = color(na), textcolor = cSell, size = size.normal)
+            label.new(bar_index, high, close > cH ? "3 (break)" : "3 (sweep)", style = label.style_label_down, color = color(na), textcolor = color.new(#089981, 0), size = size.normal)
+            if showLines
+                lnLow  := line.new(cBar, cL, bar_index, cL, color = cSell, style = line.style_dashed, width = 2)
+                lnHigh := line.new(bar_index, high, bar_index, high, color = color.gray, style = line.style_dotted)
+        cAct := false
+    // candle 2 candidate: red, out of the independent candle
+    if close < open and not na(refH) and (not needLowBreak or low < refL)
+        cAct := true
+        cH   := high
+        cL   := low
+        cBar := bar_index
+        mH   := refH
+        mL   := refL
+        mBar := refBar
+    // this candle is now the independent candle
+    refH   := high
+    refL   := low
+    refBar := bar_index
+
+barcolor(greyInside and inside ? color.new(color.gray, 30) : na)
+plotshape(sell, "Sell", shape.triangledown, location.abovebar, cSell, size = size.tiny)
+alertcondition(sell, "Sell (candle 4)", "Independent candle pullback SELL on {{ticker}} {{interval}}")
