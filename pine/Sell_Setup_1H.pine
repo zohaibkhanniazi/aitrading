@@ -1,80 +1,131 @@
 // Sell Setup 1H (owner's confirmed rules) -- part of zohaibkhanniazi/aitrading
+// Logic always runs on the SETUP timeframe (default 1H):
 // 1. Independent candle = not inside the last independent candle (own high or low). Inside candles are ignored.
 // 2. R = newest independent RED candle.
 // 3. Valid pullback = a later GREEN candle takes R's high (wick or close above) WITHOUT going below R's low.
 //    If price takes R's low first, or both sides at once, R is finished (no pullback).
-// 4. SELL = a candle closes below R's low.
+// 4. BC (break candle) = a candle closes below R's low.
 // 5. No cancel: a close above the sweep high does not cancel; keep waiting for the close below.
-// 6. Several valid pullbacks can wait at once (newest = main). A close below several lows triggers all of them.
+// 6. Several valid pullbacks can wait at once (newest = main). A close below several lows counts for all of them.
+// On the 1H chart: full marking. On a lower chart (3m / 5m): only the range of each BC candle is highlighted.
 //@version=5
-indicator("Sell Setup 1H (pullback sweep + close below)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+indicator("Sell Setup 1H (pullback sweep + BC)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
 
-greyInside = input.bool(true, "Grey out inside candles (ignored)")
+setupTf    = input.timeframe("60", "Setup timeframe")
+greyInside = input.bool(true, "Grey out inside candles (setup chart only)")
 maxActive  = input.int(20, "Max setups waiting at once (oldest dropped)", minval = 1, maxval = 100)
-cSell      = input.color(#F23645, "Sell colour")
+cSell      = input.color(#F23645, "BC / pullback colour")
 cGreen     = input.color(#089981, "Sweep colour")
 
+int  setupSec = timeframe.in_seconds(setupTf)
+bool onSetup  = timeframe.in_seconds() == setupSec
+bool lowerTf  = timeframe.in_seconds() < setupSec
+
+// =====================================================================
+// A. Lower timeframe: same rules computed on the setup timeframe, only BC ranges drawn
+// =====================================================================
+bcLogic() =>
+    var float refH = na
+    var float refL = na
+    var bool  cAct = false
+    var float cH   = na
+    var float cL   = na
+    var array<float> lv = array.new<float>()
+    bool ins = not na(refH) and high <= refH and low >= refL
+    int  n   = 0
+    if array.size(lv) > 0
+        for i = array.size(lv) - 1 to 0
+            if close < array.get(lv, i)
+                n += 1
+                array.remove(lv, i)
+    if not ins
+        if cAct
+            bool tH = high > cH
+            bool tL = low < cL
+            if tH and not tL and close > open
+                array.push(lv, cL)
+                if array.size(lv) > maxActive
+                    array.shift(lv)
+                cAct := false
+            else if tL
+                cAct := false
+        if close < open
+            cAct := true
+            cH   := high
+            cL   := low
+        refH := high
+        refL := low
+    // last CLOSED setup candle (no repainting)
+    [n[1], high[1], low[1], time[1]]
+
+[bcN, bcH, bcL, bcT] = request.security(syminfo.tickerid, setupTf, bcLogic(), lookahead = barmerge.lookahead_on)
+bool newSetupBar = ta.change(bcT) != 0
+if lowerTf and newSetupBar and bcN > 0
+    box.new(bcT, bcH, bcT + setupSec * 1000, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
+
+// =====================================================================
+// B. Setup timeframe chart (1H): full marking
+// =====================================================================
 type Setup
     float lvl
     int   rBar
     line  ln
 
 var array<Setup> setups = array.new<Setup>()
-
-// current independent (reference) candle
 var float refH = na
 var float refL = na
-bool inside = not na(refH) and high <= refH and low >= refL
-
-// newest independent red candle (R) waiting for its pullback
 var bool  cAct = false
 var float cH   = na
 var float cL   = na
 var int   cBar = na
+bool inside = not na(refH) and high <= refH and low >= refL
+bool bcNow  = false
 
-// 1. waiting setups: a close below R's low -> SELL (every setup it closes below)
-int nTrig = 0
-if array.size(setups) > 0
-    for i = array.size(setups) - 1 to 0
-        Setup st = array.get(setups, i)
-        line.set_x2(st.ln, bar_index)
-        if close < st.lvl
-            line.set_color(st.ln, cSell)
-            line.set_style(st.ln, line.style_solid)
-            nTrig += 1
-            array.remove(setups, i)
-bool sellNow = nTrig > 0
-if sellNow
-    label.new(bar_index, high, nTrig > 1 ? "SELL (" + str.tostring(nTrig) + " setups)" : "SELL", style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+if onSetup
+    // 1. waiting setups: a close below R's low -> BC (every setup it closes below)
+    int nTrig = 0
+    if array.size(setups) > 0
+        for i = array.size(setups) - 1 to 0
+            Setup st = array.get(setups, i)
+            line.set_x2(st.ln, bar_index)
+            if close < st.lvl
+                line.set_color(st.ln, cSell)
+                line.set_style(st.ln, line.style_solid)
+                nTrig += 1
+                array.remove(setups, i)
+    if nTrig > 0
+        bcNow := true
+        label.new(bar_index, high, nTrig > 1 ? "BC (" + str.tostring(nTrig) + " setups)" : "BC", style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+    // 2. the pattern is built only from independent candles
+    if not inside
+        if cAct
+            bool tH = high > cH
+            bool tL = low < cL
+            if tH and not tL and close > open
+                box.new(cBar, cH, bar_index, cL, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85))
+                label.new(cBar, cL, "R", style = label.style_label_up, color = cSell, textcolor = color.white, size = size.small)
+                label.new(bar_index, high, close > cH ? "close above" : "sweep", style = label.style_label_down, color = cGreen, textcolor = color.white, size = size.tiny)
+                line ln = line.new(cBar, cL, bar_index, cL, color = color.new(cSell, 20), style = line.style_dashed, width = 2)
+                array.push(setups, Setup.new(cL, cBar, ln))
+                if array.size(setups) > maxActive
+                    Setup old = array.shift(setups)
+                    line.set_color(old.ln, color.new(color.gray, 50))
+                cAct := false
+            else if tL
+                cAct := false
+        if close < open
+            cAct := true
+            cH   := high
+            cL   := low
+            cBar := bar_index
+        refH := high
+        refL := low
 
-// 2. the pattern is built only from independent candles
-if not inside
-    if cAct
-        bool tH = high > cH
-        bool tL = low < cL
-        if tH and not tL and close > open
-            // valid pullback on R
-            box.new(cBar, cH, bar_index, cL, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85))
-            label.new(cBar, cL, "R", style = label.style_label_up, color = cSell, textcolor = color.white, size = size.small)
-            label.new(bar_index, high, close > cH ? "close above" : "sweep", style = label.style_label_down, color = cGreen, textcolor = color.white, size = size.tiny)
-            line ln = line.new(cBar, cL, bar_index, cL, color = color.new(cSell, 20), style = line.style_dashed, width = 2)
-            array.push(setups, Setup.new(cL, cBar, ln))
-            if array.size(setups) > maxActive
-                Setup old = array.shift(setups)
-                line.set_color(old.ln, color.new(color.gray, 50))
-            cAct := false
-        else if tL
-            // R's low taken first (or both sides): R is finished
-            cAct := false
-    // newest independent red candle becomes R
-    if close < open
-        cAct := true
-        cH   := high
-        cL   := low
-        cBar := bar_index
-    refH := high
-    refL := low
+barcolor(onSetup and greyInside and inside ? color.new(color.gray, 30) : na)
+plotshape(bcNow, "BC", shape.triangledown, location.abovebar, cSell, size = size.tiny)
 
-barcolor(greyInside and inside ? color.new(color.gray, 30) : na)
-plotshape(sellNow, "Sell", shape.triangledown, location.abovebar, cSell, size = size.tiny)
-alertcondition(sellNow, "Sell setup (close below R)", "Sell setup on {{ticker}} {{interval}}: close below the pullback candle's low")
+var table note = table.new(position.bottom_right, 1, 1)
+if barstate.islast and not onSetup and not lowerTf
+    table.cell(note, 0, 0, "Sell Setup: open the " + setupTf + " chart or a lower one", text_color = color.orange)
+
+alertcondition(onSetup ? bcNow : (lowerTf and newSetupBar and bcN > 0), "BC (close below R)", "BC on {{ticker}}: setup-timeframe close below the pullback candle's low")
