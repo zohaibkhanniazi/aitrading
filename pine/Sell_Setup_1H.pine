@@ -13,6 +13,7 @@
 //   - NCC = the first candle after CC that comes back up and tests CC's breaker point (R's low).
 //           If the next candle does not test it, the following one is checked, and so on.
 //           Horizontal lines at the NCC high and low, extended to the right.
+//   - NCCLT = the first candle (any colour) after NCC whose high goes above the NCC high (takes that liquidity).
 //   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
 //@version=5
 indicator("Sell Setup 1H (pullback sweep + BC)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -27,6 +28,7 @@ ccMode     = input.string("Close below", "CC = first candle that", options = ["C
 nccTol     = input.float(0.0, "NCC test tolerance (price below the breaker point that still counts)", minval = 0, step = 0.1)
 nccMax     = input.int(200, "Stop looking for NCC after (candles after CC)", minval = 1, maxval = 2000)
 cCC        = input.color(#2962FF, "CC / NCC colour")
+cLT        = input.color(#9C27B0, "NCCLT colour")
 ccFor      = input.string("Selected BC only", "Draw CC / NCC for", options = ["Selected BC only", "All BCs"])
 selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
 showH      = input.bool(false, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
@@ -127,10 +129,39 @@ drawNcc(int off) =>
     label.new(bar_index - off, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
     true
 
+// NCCLT search: first candle after NCC whose high goes above the NCC high (liquidity taken)
+var bool  ltSearch = false
+var float ltLvl    = na
+var int   ltStart  = na
+drawLt(int off) =>
+    label.new(bar_index - off, high[off], "NCCLT", style = label.style_label_down, color = cLT, textcolor = color.white, size = size.tiny)
+    true
+
+// NCC high already taken by a candle that closed? (offsets newer than the NCC candle)
+ltFind(int ncOff, float lvl) =>
+    int f = na
+    if ncOff >= 2
+        for j = ncOff - 1 to 1
+            if high[j] > lvl
+                f := j
+                break
+    f
+
+if lowerTf and ltSearch and not (newSetupBar and bcN > 0)
+    if high[1] > ltLvl
+        drawLt(1)
+        ltSearch := false
+    else if bar_index - 1 - ltStart > nccMax
+        ltSearch := false
+
 if lowerTf and nSearch and not (newSetupBar and bcN > 0)
     if high[1] >= nLvl - nccTol
         drawNcc(1)
-        nSearch := false
+        nSearch  := false
+        // NCC is the candle that just closed: start watching its high
+        ltSearch := true
+        ltLvl    := high[1]
+        ltStart  := bar_index - 1
     else if bar_index - 1 - nCCBar > nccMax
         nSearch := false
 
@@ -158,9 +189,17 @@ if lowerTf and newSetupBar and bcN > 0
                     if high[j] >= bcLvl - nccTol
                         nc := j
                         break
+            ltSearch := false
             if not na(nc)
                 drawNcc(nc)
                 nSearch := false
+                int lt = ltFind(nc, high[nc])
+                if not na(lt)
+                    drawLt(lt)
+                else
+                    ltSearch := true
+                    ltLvl    := high[nc]
+                    ltStart  := bar_index - nc
             else
                 // keep checking the next candles as they close
                 nSearch := true
