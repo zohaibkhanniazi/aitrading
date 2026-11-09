@@ -43,6 +43,7 @@ input double InpMaxSpread   = 0.0;    // skip when spread is above this (0 = off
 input double InpMinStop     = 0.0;    // skip when stop distance is below this (0 = off)
 input double InpMaxStop     = 0.0;    // skip when stop distance is above this (0 = off)
 input bool   InpTrade       = true;   // false = signals and chart-price stats only
+input bool   InpDraw        = true;   // draw BC, CC, NCC, liquidity, NCCLT, SELL (live chart / visual test)
 input ulong  InpMagic       = 20261110;
 input int    InpDeviation   = 50;
 
@@ -65,6 +66,8 @@ struct Block
    datetime ccT;
    datetime ncT;
    datetime ltT;
+   datetime swT;     // candle of the liquidity high
+   double   ncL;     // NCC low
 };
 
 struct VTrade
@@ -78,6 +81,8 @@ struct VTrade
 };
 
 CTrade   trade;
+bool     gDraw = false;
+int      gObj = 0;
 datetime lastBar = 0;
 bool     warm = false;
 datetime lastSetup = 0;     // open time of the last processed (closed) setup candle
@@ -102,6 +107,7 @@ double   sumStop = 0, minStop = 0, maxStop = 0, sumSpread = 0;
 
 int OnInit()
 {
+   gDraw = InpDraw && (!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE));
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpDeviation);
    trade.SetTypeFillingBySymbol(_Symbol);
@@ -152,6 +158,52 @@ void OnDeinit(const int reason)
       PrintFormat("FUNNEL [%s] stop size: avg %.2f  min %.2f  max %.2f | avg spread at signal %.2f",
                   tf, sumStop / nSig, minStop, maxStop, sumSpread / nSig);
    PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f)", tf, nTrades, nSkip, InpRR);
+}
+
+//+------------------------------------------------------------------+
+//| Drawing (only on a live chart or in a visual test)                |
+//+------------------------------------------------------------------+
+string ObjName(const string k)
+{
+   gObj++;
+   return "SS_" + k + "_" + IntegerToString(gObj);
+}
+
+void DrawText(const datetime t, const double p, const string txt, const color c, const ENUM_ANCHOR_POINT a)
+{
+   if(!gDraw) return;
+   string n = ObjName("t");
+   if(!ObjectCreate(0, n, OBJ_TEXT, 0, t, p)) return;
+   ObjectSetString(0, n, OBJPROP_TEXT, txt);
+   ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+   ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, n, OBJPROP_ANCHOR, a);
+   ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+}
+
+void DrawLine(const datetime t1, const double p1, const datetime t2, const double p2, const color c,
+              const ENUM_LINE_STYLE st, const int w)
+{
+   if(!gDraw) return;
+   string n = ObjName("l");
+   if(!ObjectCreate(0, n, OBJ_TREND, 0, t1, p1, t2, p2)) return;
+   ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+   ObjectSetInteger(0, n, OBJPROP_STYLE, st);
+   ObjectSetInteger(0, n, OBJPROP_WIDTH, w);
+   ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+}
+
+void DrawBox(const datetime t1, const double p1, const datetime t2, const double p2, const color c)
+{
+   if(!gDraw) return;
+   string n = ObjName("b");
+   if(!ObjectCreate(0, n, OBJ_RECTANGLE, 0, t1, p1, t2, p2)) return;
+   ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+   ObjectSetInteger(0, n, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, n, OBJPROP_FILL, false);
+   ObjectSetInteger(0, n, OBJPROP_BACK, true);
+   ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
 }
 
 //+------------------------------------------------------------------+
@@ -314,6 +366,16 @@ void OnSellSignal(const MqlRates &r, const Block &b)
    PrintFormat("SIG %s entry %.2f SL %.2f stop %.2f spread %.2f | BC %s level %.2f | CC %s | NCC %s | liquidity %.2f | NCCLT %s low %.2f",
                TimeToString(r.time), e, sl, risk, spread, TimeToString(b.bcT), b.lvl, TimeToString(b.ccT),
                TimeToString(b.ncT), b.swH, TimeToString(b.ltT), b.ltL);
+   if(gDraw)
+   {
+      datetime t2 = r.time + 20 * PeriodSeconds(_Period);
+      double tp = e - InpRR * risk;
+      DrawLine(r.time, e, t2, e, clrDodgerBlue, STYLE_SOLID, 2);
+      DrawLine(r.time, sl, t2, sl, clrRed, STYLE_SOLID, 2);
+      DrawLine(r.time, tp, t2, tp, clrSeaGreen, STYLE_SOLID, 2);
+      DrawText(r.time, sl, StringFormat("SELL %.2f  SL %.2f (NCCLT high)  TP %.2f (%.0fR)", e, sl, tp, InpRR),
+               clrRed, ANCHOR_LEFT_LOWER);
+   }
    OpenSell(sl);
 }
 
@@ -372,7 +434,10 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          b.conf = 0;
          b.stage = 1;
          b.ncT = r.time;
+         b.ncL = r.low;
+         b.swT = r.time;
          nNcc++;
+         DrawText(r.time, r.low, "NCC", clrDodgerBlue, ANCHOR_UPPER);
       }
    }
    else if(b.stage == 1)
@@ -381,6 +446,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       if(r.high > b.swH)
       {
          b.swH = r.high;
+         b.swT = r.time;
          b.conf = 0;
       }
       else
@@ -399,6 +465,9 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          b.ltT = r.time;
          b.stage = 3;
          nLt++;
+         DrawLine(b.swT, b.swH, r.time, b.swH, clrDodgerBlue, STYLE_SOLID, 2);
+         DrawLine(b.ncT, b.ncL, r.time, b.ncL, clrDodgerBlue, STYLE_SOLID, 2);
+         DrawText(r.time, r.high, "NCCLT", clrMagenta, ANCHOR_LOWER);
       }
    }
    else if(b.stage == 3)
@@ -434,8 +503,15 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed)
       bool brk = InpCcWick ? (lr[i].low < lvl) : (lr[i].close < lvl);
       if(brk) { cc = i; break; }
    }
+   if(gDraw)
+   {
+      DrawBox(bcT, h.high, endT, h.low, clrRed);
+      DrawText(bcT, h.high, "BC " + TimeToString(bcT, TIME_MINUTES), clrRed, ANCHOR_LEFT_LOWER);
+      DrawLine(bcT, lvl, endT, lvl, clrRed, STYLE_DOT, 1);
+   }
    if(cc < 0) { nNoCc++; return; }
    nCc++;
+   DrawText(lr[cc].time, lr[cc].high, "CC", clrDodgerBlue, ANCHOR_LOWER);
    Block b;
    b.lvl = lvl;
    b.stage = 0;
@@ -448,6 +524,8 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed)
    b.bcT = bcT;
    b.ncT = 0;
    b.ltT = 0;
+   b.swT = 0;
+   b.ncL = 0;
    datetime ccT = lr[cc].time;
    b.ccT = ccT;
    if(lastClosed > ccT)
