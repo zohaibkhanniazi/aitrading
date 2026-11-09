@@ -22,6 +22,7 @@ G2 = "Entry (chart timeframe)"
 p10Mode   = input.string("Retest high (green close above candle 2 low)", "Point 10", options = ["Retest high (green close above candle 2 low)", "Last swing high inside candle 4", "High of candle 4"], group = G2)
 p10Skip   = input.bool(false, "Retest mode: skip the setup if no green candle closed above the line", group = G2, tooltip = "Off = fall back to the last swing high inside candle 4 (marked 10*).")
 sweepGrn  = input.bool(true, "Sweep candle must be green", group = G2)
+sweepNeed = input.string("Wick above is enough", "Sweep of point 10 needs", options = ["Wick above is enough", "Body close above point 10"], group = G2)
 waitH     = input.int(24, "Wait for the entry up to (setup candles after candle 4)", minval = 1, group = G2)
 rr        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = G2)
 slBuf     = input.float(0.0, "Stop buffer above the sweep high (price)", minval = 0, step = 0.1, group = G2)
@@ -72,7 +73,8 @@ htfLogic() =>
     [sig[1], lvl[1], pb[1], high[1], time[1]]
 
 [hSig, hLvl, hPB, h4High, h4Time] = request.security(syminfo.tickerid, htf, htfLogic(), lookahead = barmerge.lookahead_on)
-bool newSetup = hSig and ta.change(h4Time) != 0
+bool tfOk = timeframe.in_seconds() < timeframe.in_seconds(htf)
+bool newSetup = tfOk and hSig and ta.change(h4Time) != 0
 
 // ---------------------------------------------------------------- trades + stats
 type Trade
@@ -174,7 +176,7 @@ if lAct
             if sAct
                 sExt := math.max(sExt, high)
             // (latest) sweep of point 10
-            if high > p10 and (not sweepGrn or close > open)
+            if high > p10 and (not sweepGrn or close > open) and (sweepNeed == "Wick above is enough" or close > p10)
                 sAct := true
                 sL   := low
                 sExt := high
@@ -222,7 +224,9 @@ if array.size(trades) > 0
 
 var int firstTime = time
 var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
-if barstate.islast and showStats
+if barstate.islast and not tfOk
+    table.cell(tb, 0, 0, "Open a chart BELOW " + htf + " (e.g. 3m). On this timeframe the entry part cannot work.", text_color = color.orange, text_size = size.normal)
+if barstate.islast and showStats and tfOk
     int closed = stats.wins + stats.losses
     table.cell(tb, 0, 0, "Sells (" + htf + " setup / " + timeframe.period + " entry)", text_color = color.white, text_size = size.small)
     table.cell(tb, 1, 0, str.tostring(stats.trades), text_color = color.white, text_size = size.small)
