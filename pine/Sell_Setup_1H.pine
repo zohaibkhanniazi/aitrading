@@ -7,7 +7,8 @@
 // 4. BC (break candle) = a candle closes below R's low.
 // 5. No cancel: a close above the sweep high does not cancel; keep waiting for the close below.
 // 6. Several valid pullbacks can wait at once (newest = main). A close below several lows counts for all of them.
-// On the 1H chart: full marking. On a lower chart (3m / 5m): only the range of each BC candle is highlighted.
+// On the 1H chart: full marking. On a lower chart (3m / 5m): the range of each BC candle is highlighted, and the
+// valid pullbacks of the lower chart (same rules) that happen inside that BC candle are numbered h1, h2, h3...
 //@version=5
 indicator("Sell Setup 1H (pullback sweep + BC)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
 
@@ -16,6 +17,9 @@ greyInside = input.bool(true, "Grey out inside candles (setup chart only)")
 maxActive  = input.int(20, "Max setups waiting at once (oldest dropped)", minval = 1, maxval = 100)
 cSell      = input.color(#F23645, "BC / pullback colour")
 cGreen     = input.color(#089981, "Sweep colour")
+showH      = input.bool(true, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
+earlyR     = input.bool(false, "Lower chart: the red candle may start before the BC candle (only the sweep must be inside)")
+cH_        = input.color(#FF9800, "h1 / h2 / h3 colour")
 
 int  setupSec = timeframe.in_seconds(setupTf)
 bool onSetup  = timeframe.in_seconds() == setupSec
@@ -60,8 +64,55 @@ bcLogic() =>
 
 [bcN, bcH, bcL, bcT] = request.security(syminfo.tickerid, setupTf, bcLogic(), lookahead = barmerge.lookahead_on)
 bool newSetupBar = ta.change(bcT) != 0
+
+// valid pullbacks on the lower chart itself (same rules), remembered so they can be numbered inside a BC candle
+type PB
+    int   sweepBar
+    int   sweepTime
+    float sweepHigh
+    int   rBar
+    int   rTime
+
+var array<PB> pbs = array.new<PB>()
+var float l3RefH = na
+var float l3RefL = na
+var bool  l3Act  = false
+var float l3H    = na
+var float l3L    = na
+var int   l3Bar  = na
+var int   l3Time = na
+bool l3Inside = not na(l3RefH) and high <= l3RefH and low >= l3RefL
+if lowerTf and not l3Inside
+    if l3Act
+        bool tH3 = high > l3H
+        bool tL3 = low < l3L
+        if tH3 and not tL3 and close > open
+            array.push(pbs, PB.new(bar_index, time, high, l3Bar, l3Time))
+            if array.size(pbs) > 400
+                array.shift(pbs)
+            l3Act := false
+        else if tL3
+            l3Act := false
+    if close < open
+        l3Act  := true
+        l3H    := high
+        l3L    := low
+        l3Bar  := bar_index
+        l3Time := time
+    l3RefH := high
+    l3RefL := low
+
 if lowerTf and newSetupBar and bcN > 0
-    box.new(bcT, bcH, bcT + setupSec * 1000, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
+    int bcEnd = bcT + setupSec * 1000
+    box.new(bcT, bcH, bcEnd, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
+    if showH and array.size(pbs) > 0
+        int k = 0
+        for i = 0 to array.size(pbs) - 1
+            PB e = array.get(pbs, i)
+            if e.sweepTime >= bcT and e.sweepTime < bcEnd and (earlyR or e.rTime >= bcT)
+                k += 1
+                label.new(e.sweepBar, e.sweepHigh, "h" + str.tostring(k), style = label.style_label_down, color = cH_, textcolor = color.white, size = size.tiny)
+                line.new(e.rBar, e.sweepHigh, e.sweepBar, e.sweepHigh, color = cH_, style = line.style_dotted)
 
 // =====================================================================
 // B. Setup timeframe chart (1H): full marking
