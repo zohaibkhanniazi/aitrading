@@ -34,7 +34,7 @@ nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minv
 swingConf  = input.int(1, "Liquidity swing high confirmed after (candles without a higher high)", minval = 1, maxval = 10)
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
-rrE        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = "Trade")
+rrE        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = "Trade")
 showStats  = input.bool(true, "Results table", group = "Trade")
 ccFor      = input.string("All BCs", "Draw CC / NCC / NCCLT / SELL for", options = ["All BCs", "Selected BC"], tooltip = "All BCs = every block follows its own chain. Selected BC = only the block you click (see below).")
 selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block (used when 'Selected BC' is chosen)", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
