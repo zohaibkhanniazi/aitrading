@@ -27,6 +27,8 @@ ccMode     = input.string("Close below", "CC = first candle that", options = ["C
 nccTol     = input.float(0.0, "NCC test tolerance (price below the breaker point that still counts)", minval = 0, step = 0.1)
 nccMax     = input.int(200, "Stop looking for NCC after (candles after CC)", minval = 1, maxval = 2000)
 cCC        = input.color(#2962FF, "CC / NCC colour")
+ccFor      = input.string("Selected BC only", "Draw CC / NCC for", options = ["Selected BC only", "All BCs"])
+selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
 showH      = input.bool(false, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
 earlyR     = input.bool(false, "Lower chart: the red candle may start before the BC candle (only the sweep must be inside)")
 cH_        = input.color(#FF9800, "h1 / h2 / h3 colour")
@@ -135,7 +137,8 @@ if lowerTf and nSearch and not (newSetupBar and bcN > 0)
 if lowerTf and newSetupBar and bcN > 0
     int bcEnd = bcT + setupSec * 1000
     box.new(bcT, bcH, bcEnd, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
-    if showCC and not na(bcLvl)
+    bool sel = ccFor == "All BCs" or (selT >= bcT and selT < bcEnd)
+    if showCC and sel and not na(bcLvl)
         line.new(bcT, bcLvl, bcEnd, bcLvl, xloc = xloc.bar_time, color = color.new(cSell, 30), style = line.style_dotted)
         // CC = oldest candle inside BC that closes (or trades) below R's low
         int ratio = math.max(1, math.round(setupSec / timeframe.in_seconds()))
