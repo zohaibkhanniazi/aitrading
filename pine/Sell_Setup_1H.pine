@@ -14,6 +14,8 @@
 //           If the next candle does not test it, the following one is checked, and so on.
 //           Horizontal lines at the NCC high and low, from NCC until NCCLT.
 //   - NCCLT = the first candle (any colour) after NCC whose high goes above the NCC high (takes that liquidity).
+//   - SELL  = the first candle after NCCLT that closes (body) below the NCCLT low. Entry = its close,
+//             SL = NCCLT high, TP = RR x risk. Results are tracked in a table.
 //   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
 //@version=5
 indicator("Sell Setup 1H (pullback sweep + BC)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -29,6 +31,8 @@ nccTol     = input.float(0.0, "NCC test tolerance (price below the breaker point
 nccMax     = input.int(200, "Stop looking for NCC after (candles after CC)", minval = 1, maxval = 2000)
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
+rrE        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = "Trade")
+showStats  = input.bool(true, "Results table", group = "Trade")
 ccFor      = input.string("Latest BC", "Draw CC / NCC / NCCLT for", options = ["Latest BC", "Selected BC", "All BCs"], tooltip = "Latest BC = only the most recent BC block (older drawings are removed). Selected BC = the block you click (see below). All BCs = every block.")
 selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block (used when 'Selected BC' is chosen)", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
 showH      = input.bool(false, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
@@ -119,6 +123,93 @@ if lowerTf and not l3Inside
     l3RefH := high
     l3RefL := low
 
+// ---------------------------------------------------------------- trades (lower chart)
+type Trade
+    float entry
+    float sl
+    float tp
+    int   bar
+    int   chk
+    line  le
+    line  ls
+    line  lt
+    label lb
+
+type Stats
+    int   trades = 0
+    int   wins = 0
+    int   losses = 0
+    float netR = 0.0
+
+var array<Trade> trades = array.new<Trade>()
+var Stats stats = Stats.new()
+
+// SELL at the close of the candle `off` candles ago, stop at `sl`
+openTradeAt(array<Trade> ts, Stats st, int off, float sl) =>
+    float e  = close[off]
+    float tp = e - rrE * (sl - e)
+    int   x  = bar_index - off
+    string txt = "SELL\nEntry " + str.tostring(e, format.mintick) + "\nSL " + str.tostring(sl, format.mintick) + "  (NCCLT high)\nTP " + str.tostring(tp, format.mintick) + "  (" + str.tostring(rrE) + "R)"
+    label lb = label.new(x, sl, txt, style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+    line le = line.new(x, e, x + 1, e, color = color.new(#2962FF, 0), width = 2)
+    line ls = line.new(x, sl, x + 1, sl, color = cSell, width = 2)
+    line lt = line.new(x, tp, x + 1, tp, color = color.new(#089981, 0), width = 2)
+    array.push(ts, Trade.new(e, sl, tp, x, x, le, ls, lt, lb))
+    st.trades := st.trades + 1
+    alert("SELL " + syminfo.ticker + "  entry " + str.tostring(e, format.mintick) + "  SL " + str.tostring(sl, format.mintick) + "  TP " + str.tostring(tp, format.mintick), alert.freq_once_per_bar_close)
+    true
+
+// check every closed candle after the entry for the stop or the target (stop first if both in one candle)
+updateTrades(array<Trade> ts, Stats st) =>
+    int n = array.size(ts)
+    if n > 0
+        for i = n - 1 to 0
+            Trade t = array.get(ts, i)
+            int first = bar_index - 1 - t.chk
+            bool done = false
+            if first >= 1
+                for o = math.min(first, 400) to 1
+                    bool hitSl = high[o] >= t.sl
+                    bool hitTp = low[o] <= t.tp
+                    if hitSl or hitTp
+                        bool win = hitTp and not hitSl
+                        st.netR := st.netR + (win ? rrE : -1.0)
+                        if win
+                            st.wins := st.wins + 1
+                        else
+                            st.losses := st.losses + 1
+                        int xe = bar_index - o
+                        line.set_x2(t.le, xe)
+                        line.set_x2(t.ls, xe)
+                        line.set_x2(t.lt, xe)
+                        label.set_text(t.lb, label.get_text(t.lb) + (win ? "\nRESULT: TP hit +" + str.tostring(rrE) + "R" : "\nRESULT: SL hit -1R"))
+                        done := true
+                        break
+            if done
+                array.remove(ts, i)
+            else
+                t.chk := bar_index - 1
+                line.set_x2(t.le, bar_index)
+                line.set_x2(t.ls, bar_index)
+                line.set_x2(t.lt, bar_index)
+    true
+
+// entry search after NCCLT
+var bool  eSearch = false
+var float eLow    = na
+var float eHigh   = na
+var int   eStart  = na
+
+// first already-closed candle after NCCLT (offset ltOff) that closes below the NCCLT low
+eFind(int ltOff, float lvl) =>
+    int f = na
+    if ltOff >= 2
+        for j = ltOff - 1 to 1
+            if close[j] < lvl
+                f := j
+                break
+    f
+
 // ---------------------------------------------------------------- CC / NCC / NCCLT (lower chart)
 // drawings of the current block (deleted when the next BC replaces it in "Latest BC" mode)
 var array<label> blkLabels = array.new<label>()
@@ -168,6 +259,14 @@ ltFind(int ncOff, float lvl) =>
 
 bool otherBc = newSetupBar and bcN > 0
 
+// waiting for the entry (close below the NCCLT low)
+if lowerTf and eSearch and not otherBc
+    if close[1] < eLow
+        openTradeAt(trades, stats, 1, eHigh)
+        eSearch := false
+    else if bar_index - 1 - eStart > nccMax
+        eSearch := false
+
 // waiting for NCCLT
 if lowerTf and ltSearch and not otherBc
     if high[1] > ltLvl
@@ -175,6 +274,10 @@ if lowerTf and ltSearch and not otherBc
         line.set_x2(ncHi, bar_index - 1)
         line.set_x2(ncLo, bar_index - 1)
         ltSearch := false
+        eSearch  := true
+        eLow     := low[1]
+        eHigh    := high[1]
+        eStart   := bar_index - 1
     else if bar_index - 1 - ltStart > nccMax
         ltSearch := false
     else
@@ -206,6 +309,7 @@ if lowerTf and otherBc
             array.clear(blkLines)
         nSearch  := false
         ltSearch := false
+        eSearch  := false
         array.push(blkLines, line.new(bcT, bcLvl, bcEnd, bcLvl, xloc = xloc.bar_time, color = color.new(cSell, 30), style = line.style_dotted))
         // CC = oldest candle inside BC that closes (or trades) below R's low
         int ratio = math.max(1, math.round(setupSec / timeframe.in_seconds()))
@@ -234,6 +338,14 @@ if lowerTf and otherBc
                     drawLt(lt)
                     line.set_x2(ncHi, bar_index - lt)
                     line.set_x2(ncLo, bar_index - lt)
+                    int en = eFind(lt, low[lt])
+                    if not na(en)
+                        openTradeAt(trades, stats, en, high[lt])
+                    else
+                        eSearch := true
+                        eLow    := low[lt]
+                        eHigh   := high[lt]
+                        eStart  := bar_index - lt
                 else
                     ltSearch := true
                     ltLvl    := high[nc]
@@ -252,6 +364,24 @@ if lowerTf and otherBc
                 k += 1
                 label.new(e.sweepBar, e.sweepHigh, "h" + str.tostring(k), style = label.style_label_down, color = cH_, textcolor = color.white, size = size.tiny)
                 line.new(e.rBar, e.sweepHigh, e.sweepBar, e.sweepHigh, color = cH_, style = line.style_dotted)
+
+if lowerTf
+    updateTrades(trades, stats)
+
+var int firstTime = time
+var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast and lowerTf and showStats
+    int closed = stats.wins + stats.losses
+    table.cell(tb, 0, 0, "Sells (" + setupTf + " BC / " + timeframe.period + " entry)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, str.tostring(stats.trades), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Wins / losses", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(stats.wins) + " / " + str.tostring(stats.losses), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Win rate", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, closed > 0 ? str.tostring(100.0 * stats.wins / closed, "#.0") + "%" : "-", text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Net R (" + str.tostring(rrE) + "R target)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 3, str.tostring(stats.netR, "#.0") + "R", text_color = stats.netR >= 0 ? color.new(#089981, 0) : cSell, text_size = size.small)
+    table.cell(tb, 0, 4, "Since", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 4, str.format_time(firstTime, "yyyy-MM-dd HH:mm", syminfo.timezone), text_color = color.white, text_size = size.small)
 
 // =====================================================================
 // B. Setup timeframe chart (1H): full marking
