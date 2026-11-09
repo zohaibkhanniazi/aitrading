@@ -48,7 +48,7 @@ run_one() {  # $1 = ini path
   touch "$MT5DIR/.start"
   echo "== backtest: $REP (may take a few minutes)"
   (cd "$MT5DIR" && "$WINE" terminal64.exe "/config:tester_run.ini")
-  for i in $(seq 1 60); do pgrep -fi "terminal64|metatester64" >/dev/null || break; sleep 2; done
+  for i in $(seq 1 300); do pgrep -fi "terminal64|metatester64" >/dev/null || break; sleep 2; done
   sleep 3
   local REPORT; REPORT=$(find "$MT5DIR" -maxdepth 2 -newer "$MT5DIR/.start" -name "$REP.htm*" 2>/dev/null | head -1)
   if [ -z "$REPORT" ]; then echo "No report for $REP. Check Symbol in the ini."; return 1; fi
