@@ -34,6 +34,11 @@ input bool   InpCcWick      = false;  // CC = first candle trading below (false 
 input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
+input group "Stop"
+input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
+input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
+input double InpMaxStopX    = 0.0;    // skip if stop > X x usual stop (median of last 50 signals); 0 = off
+input double InpMinStopX    = 0.0;    // skip if stop < X x usual stop; 0 = off
 input group "Trade"
 input double InpRR          = 2.0;    // target in R
 input double InpRiskMoney   = 100.0;  // money risked per trade = 1R (0 = use InpRiskPercent)
@@ -104,6 +109,8 @@ int      yW[NY][NR];
 int      yL[NY][NR];
 int      yN[NY];
 double   sumStop = 0, minStop = 0, maxStop = 0, sumSpread = 0;
+double   recentStops[];         // stops of the last 50 signals (the "usual" stop = their median)
+int      nFiltered = 0, nFallback = 0;
 
 int OnInit()
 {
@@ -157,7 +164,8 @@ void OnDeinit(const int reason)
    if(nSig > 0)
       PrintFormat("FUNNEL [%s] stop size: avg %.2f  min %.2f  max %.2f | avg spread at signal %.2f",
                   tf, sumStop / nSig, minStop, maxStop, sumSpread / nSig);
-   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f)", tf, nTrades, nSkip, InpRR);
+   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f) | stop filter skipped %d | SL mode %d (fallback to NCCLT high %d)",
+               tf, nTrades, nSkip, InpRR, nFiltered, InpSlMode, nFallback);
 }
 
 //+------------------------------------------------------------------+
@@ -283,6 +291,16 @@ void Warmup()
    PrintFormat("warm-up: %d setup candles read, %d setups waiting", got, ArraySize(lv));
 }
 
+double Median(const double &a[])
+{
+   int n = ArraySize(a);
+   if(n == 0) return 0.0;
+   double b[];
+   ArrayCopy(b, a);
+   ArraySort(b);
+   return (n % 2 == 1) ? b[n / 2] : 0.5 * (b[n / 2 - 1] + b[n / 2]);
+}
+
 void RemoveBlock(const int i)
 {
    int n = ArraySize(blocks);
@@ -344,8 +362,27 @@ void OnSellSignal(const MqlRates &r, const Block &b)
 {
    double e = r.close;
    double sl = b.ltH;
+   if(InpSlMode == 1)
+   {
+      // stop at the liquidity the NCCLT took, plus a small buffer (if that is above the entry)
+      double s1 = b.swH + InpSlBuf;
+      if(s1 > e + InpSlBuf) sl = s1;
+      else                  nFallback++;
+   }
    double risk = sl - e;
    if(risk <= 0) return;
+   // usual stop = median stop of the last 50 signals (needs at least 20)
+   int nr = ArraySize(recentStops);
+   double usual = (nr >= 20) ? Median(recentStops) : 0.0;
+   if(nr >= 50) ArrayRemove(recentStops, 0, 1);
+   int m = ArraySize(recentStops);
+   ArrayResize(recentStops, m + 1);
+   recentStops[m] = risk;
+   if(usual > 0 && ((InpMaxStopX > 0 && risk > InpMaxStopX * usual) || (InpMinStopX > 0 && risk < InpMinStopX * usual)))
+   {
+      nFiltered++;
+      return;
+   }
    nSig++;
    double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
    sumStop += risk;
