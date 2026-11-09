@@ -13,7 +13,7 @@
 //   - NCC = the first candle after CC that comes back up and tests CC's breaker point (R's low).
 //           If the next candle does not test it, the following one is checked, and so on.
 //           Horizontal lines at the NCC high and low, from NCC until NCCLT.
-//   - NCCLT = the first candle (any colour) after NCC whose high goes above the NCC high (takes that liquidity).
+//   - NCCLT = the first candle (any colour) after NCC, formed AFTER the BC hour, whose high goes above the NCC high.
 //   - SELL  = the first candle after NCCLT that closes (body) below the NCCLT low. Entry = its close,
 //             SL = NCCLT high, TP = RR x risk. Results are tracked in a table.
 //   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
@@ -207,6 +207,7 @@ type Block
     line  lnL
     float ltH
     float ltL
+    int   endT     // end of the BC hour: NCCLT must form after it
 
 var array<Block> blocks = array.new<Block>()
 
@@ -223,10 +224,10 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             label.new(x, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
             b.stage := 1
     else if b.stage == 1
-        // NCCLT: first candle that takes the NCC high; the NCC lines stop here
+        // NCCLT: first candle OUTSIDE the BC hour that takes the NCC high; the NCC lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)
-        if high[off] > b.ncH
+        if high[off] > b.ncH and time[off] >= b.endT
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT, textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]
             b.ltL   := low[off]
@@ -266,7 +267,7 @@ if lowerTf and otherBc
                     break
         if not na(cc)
             label.new(bar_index - cc, high[cc], "CC", style = label.style_label_down, color = cCC, textcolor = color.white, size = size.tiny)
-            Block nb = Block.new(bcLvl, 0, bar_index - cc)
+            Block nb = Block.new(lvl = bcLvl, stage = 0, ccBar = bar_index - cc, endT = bcEnd)
             if cc >= 2
                 for o = cc - 1 to 1
                     stepBlock(nb, o, trades, stats)
