@@ -80,13 +80,13 @@ if not inside
             vLow  := cL
             vHigh := high
             vBar3 := bar_index
-            box.new(mBar, mH, mBar, mL, border_color = cInd, border_width = 2, bgcolor = color.new(cInd, 60))
-            line.new(mBar, mH, cBar, mH, color = color.new(cInd, 30))
-            line.new(mBar, mL, cBar, mL, color = color.new(cInd, 30))
-            label.new(mBar, mL, "1", style = label.style_label_up, color = color(na), textcolor = cInd, size = size.normal)
-            box.new(cBar, cH, cBar, cL, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 70))
-            label.new(cBar, cL, "2", style = label.style_label_up, color = color(na), textcolor = cSell, size = size.normal)
-            label.new(bar_index, high, close > cH ? "3 (break)" : "3 (sweep)", style = label.style_label_down, color = color(na), textcolor = color.new(#089981, 0), size = size.normal)
+            // candle 1's range (blue) from candle 1 up to candle 2 = the zone where inside candles were ignored
+            box.new(mBar, mH, cBar, mL, border_color = cInd, border_width = 2, bgcolor = color.new(cInd, 85))
+            label.new(mBar, mL, "1", style = label.style_label_up, color = cInd, textcolor = color.white, size = size.small)
+            // candle 2's range (red) up to candle 3
+            box.new(cBar, cH, bar_index, cL, border_color = cSell, border_width = 1, bgcolor = color.new(cSell, 85))
+            label.new(cBar, cL, "2", style = label.style_label_up, color = cSell, textcolor = color.white, size = size.small)
+            label.new(bar_index, high, close > cH ? "3 break" : "3 sweep", style = label.style_label_down, color = #089981, textcolor = color.white, size = size.small)
             if showLines
                 lnLow  := line.new(cBar, cL, bar_index, cL, color = cSell, style = line.style_dashed, width = 2)
                 lnHigh := line.new(bar_index, high, bar_index, high, color = color.gray, style = line.style_dotted)
