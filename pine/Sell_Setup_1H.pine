@@ -125,7 +125,7 @@ drawNcc(int off) =>
     label.new(bar_index - off, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
     true
 
-if lowerTf and nSearch and not newSetupBar
+if lowerTf and nSearch and not (newSetupBar and bcN > 0)
     if high[1] >= nLvl - nccTol
         drawNcc(1)
         nSearch := false
