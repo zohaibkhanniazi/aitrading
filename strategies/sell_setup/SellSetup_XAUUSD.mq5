@@ -61,6 +61,10 @@ struct Block
    double   ltH;     // NCCLT high (= stop)
    double   ltL;     // NCCLT low (close below = SELL)
    datetime endT;    // end of the BC hour
+   datetime bcT;     // chain times, printed with each signal
+   datetime ccT;
+   datetime ncT;
+   datetime ltT;
 };
 
 struct VTrade
@@ -70,6 +74,7 @@ struct VTrade
    double   sl;
    int      year;
    int      res[NR]; // 0 open, 1 win, -1 loss
+   datetime xt[NR];  // when each target or the stop was hit
 };
 
 CTrade   trade;
@@ -283,9 +288,10 @@ void OpenSell(const double nccltHigh)
 }
 
 // SELL candle closed: score it on chart prices and open the real trade
-void OnSellSignal(const MqlRates &r, const double sl)
+void OnSellSignal(const MqlRates &r, const Block &b)
 {
    double e = r.close;
+   double sl = b.ltH;
    double risk = sl - e;
    if(risk <= 0) return;
    nSig++;
@@ -302,10 +308,12 @@ void OnSellSignal(const MqlRates &r, const double sl)
    vt[s].e = e;
    vt[s].sl = sl;
    vt[s].year = dt.year;
-   for(int k = 0; k < NR; k++) vt[s].res[k] = 0;
+   for(int k = 0; k < NR; k++) { vt[s].res[k] = 0; vt[s].xt[k] = 0; }
    int yi = dt.year - Y0;
    if(yi >= 0 && yi < NY) yN[yi]++;
-   PrintFormat("SIG %s entry %.2f SL %.2f stop %.2f spread %.2f", TimeToString(r.time), e, sl, risk, spread);
+   PrintFormat("SIG %s entry %.2f SL %.2f stop %.2f spread %.2f | BC %s level %.2f | CC %s | NCC %s | liquidity %.2f | NCCLT %s low %.2f",
+               TimeToString(r.time), e, sl, risk, spread, TimeToString(b.bcT), b.lvl, TimeToString(b.ccT),
+               TimeToString(b.ncT), b.swH, TimeToString(b.ltT), b.ltL);
    OpenSell(sl);
 }
 
@@ -326,19 +334,28 @@ void UpdateVirtual(const MqlRates &r)
          if(hitSl)
          {
             vt[i].res[k] = -1;
+            vt[i].xt[k] = r.time;
             lR[k]++;
             if(yok) yL[yi][k]++;
          }
          else if(r.low <= tp)
          {
             vt[i].res[k] = 1;
+            vt[i].xt[k] = r.time;
             wR[k]++;
             if(yok) yW[yi][k]++;
          }
          else
             pending = true;
       }
-      if(!pending) RemoveVT(i);
+      if(!pending)
+      {
+         string s = StringFormat("RES %s entry %.2f SL %.2f", TimeToString(vt[i].t), vt[i].e, vt[i].sl);
+         for(int k = 0; k < NR; k++)
+            s += StringFormat(" | %.0fR %s %s", RL[k], vt[i].res[k] > 0 ? "WIN" : "LOSS", TimeToString(vt[i].xt[k]));
+         Print(s);
+         RemoveVT(i);
+      }
    }
 }
 
@@ -354,6 +371,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          b.swH = r.high;
          b.conf = 0;
          b.stage = 1;
+         b.ncT = r.time;
          nNcc++;
       }
    }
@@ -378,6 +396,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       {
          b.ltH = r.high;
          b.ltL = r.low;
+         b.ltT = r.time;
          b.stage = 3;
          nLt++;
       }
@@ -388,7 +407,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       if(r.close < b.ltL)
       {
          b.stage = 4;
-         if(live) OnSellSignal(r, b.ltH);
+         if(live) OnSellSignal(r, b);
          else     nLate++;
       }
    }
@@ -426,7 +445,11 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed)
    b.ltH = 0;
    b.ltL = 0;
    b.endT = endT;
+   b.bcT = bcT;
+   b.ncT = 0;
+   b.ltT = 0;
    datetime ccT = lr[cc].time;
+   b.ccT = ccT;
    if(lastClosed > ccT)
    {
       MqlRates cr[];
