@@ -12,7 +12,7 @@
 //   - CC  = the lower-chart candle inside BC that closes below R's low (the exact break),
 //   - NCC = the first candle after CC that comes back up and tests CC's breaker point (R's low).
 //           If the next candle does not test it, the following one is checked, and so on.
-//           Horizontal lines at the NCC high and low, extended to the right.
+//           Horizontal lines at the NCC high and low, from NCC until NCCLT.
 //   - NCCLT = the first candle (any colour) after NCC whose high goes above the NCC high (takes that liquidity).
 //   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
 //@version=5
@@ -29,8 +29,8 @@ nccTol     = input.float(0.0, "NCC test tolerance (price below the breaker point
 nccMax     = input.int(200, "Stop looking for NCC after (candles after CC)", minval = 1, maxval = 2000)
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
-ccFor      = input.string("Selected BC only", "Draw CC / NCC for", options = ["Selected BC only", "All BCs"])
-selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
+ccFor      = input.string("Latest BC", "Draw CC / NCC / NCCLT for", options = ["Latest BC", "Selected BC", "All BCs"], tooltip = "Latest BC = only the most recent BC block (older drawings are removed). Selected BC = the block you click (see below). All BCs = every block.")
+selT       = input.time(timestamp("2026-01-01 00:00 +0000"), "Selected BC: click inside the BC block (used when 'Selected BC' is chosen)", confirm = true, tooltip = "When you add the indicator, click on the chart inside the BC block you want. To pick another block later, select the indicator and drag its point, or change this time in Settings.")
 showH      = input.bool(false, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
 earlyR     = input.bool(false, "Lower chart: the red candle may start before the BC candle (only the sweep must be inside)")
 cH_        = input.color(#FF9800, "h1 / h2 / h3 colour")
@@ -119,25 +119,44 @@ if lowerTf and not l3Inside
     l3RefH := high
     l3RefL := low
 
-// NCC search: first candle after CC whose high comes back up to the breaker point
-var bool  nSearch = false
-var float nLvl    = na
-var int   nCCBar  = na
-drawNcc(int off) =>
-    line.new(bar_index - off, high[off], bar_index - off + 1, high[off], color = cCC, width = 2, extend = extend.right)
-    line.new(bar_index - off, low[off], bar_index - off + 1, low[off], color = cCC, width = 2, extend = extend.right)
-    label.new(bar_index - off, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
-    true
-
-// NCCLT search: first candle after NCC whose high goes above the NCC high (liquidity taken)
-var bool  ltSearch = false
+// ---------------------------------------------------------------- CC / NCC / NCCLT (lower chart)
+// drawings of the current block (deleted when the next BC replaces it in "Latest BC" mode)
+var array<label> blkLabels = array.new<label>()
+var array<line>  blkLines  = array.new<line>()
+var bool  nSearch  = false   // waiting for NCC: a candle that tests the breaker point
+var float nLvl     = na
+var int   nCCBar   = na
+var bool  ltSearch = false   // waiting for NCCLT: a candle above the NCC high
 var float ltLvl    = na
 var int   ltStart  = na
-drawLt(int off) =>
-    label.new(bar_index - off, high[off], "NCCLT", style = label.style_label_down, color = cLT, textcolor = color.white, size = size.tiny)
+var line  ncHi     = na
+var line  ncLo     = na
+
+clearBlock() =>
+    for lb in blkLabels
+        label.delete(lb)
+    for ln in blkLines
+        line.delete(ln)
+    array.clear(blkLabels)
+    array.clear(blkLines)
     true
 
-// NCC high already taken by a candle that closed? (offsets newer than the NCC candle)
+// NCC lines start at the NCC candle; they are stretched until NCCLT happens
+drawNcc(int off) =>
+    line a = line.new(bar_index - off, high[off], bar_index - off, high[off], color = cCC, width = 2)
+    line b = line.new(bar_index - off, low[off], bar_index - off, low[off], color = cCC, width = 2)
+    label c = label.new(bar_index - off, low[off], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
+    array.push(blkLines, a)
+    array.push(blkLines, b)
+    array.push(blkLabels, c)
+    [a, b]
+
+drawLt(int off) =>
+    label c = label.new(bar_index - off, high[off], "NCCLT", style = label.style_label_down, color = cLT, textcolor = color.white, size = size.tiny)
+    array.push(blkLabels, c)
+    true
+
+// first already-closed candle after the NCC candle whose high goes above the NCC high
 ltFind(int ncOff, float lvl) =>
     int f = na
     if ncOff >= 2
@@ -147,30 +166,47 @@ ltFind(int ncOff, float lvl) =>
                 break
     f
 
-if lowerTf and ltSearch and not (newSetupBar and bcN > 0)
+bool otherBc = newSetupBar and bcN > 0
+
+// waiting for NCCLT
+if lowerTf and ltSearch and not otherBc
     if high[1] > ltLvl
         drawLt(1)
+        line.set_x2(ncHi, bar_index - 1)
+        line.set_x2(ncLo, bar_index - 1)
         ltSearch := false
     else if bar_index - 1 - ltStart > nccMax
         ltSearch := false
+    else
+        line.set_x2(ncHi, bar_index)
+        line.set_x2(ncLo, bar_index)
 
-if lowerTf and nSearch and not (newSetupBar and bcN > 0)
+// waiting for NCC
+if lowerTf and nSearch and not otherBc
     if high[1] >= nLvl - nccTol
-        drawNcc(1)
+        [a1, b1] = drawNcc(1)
+        ncHi     := a1
+        ncLo     := b1
         nSearch  := false
-        // NCC is the candle that just closed: start watching its high
         ltSearch := true
         ltLvl    := high[1]
         ltStart  := bar_index - 1
     else if bar_index - 1 - nCCBar > nccMax
         nSearch := false
 
-if lowerTf and newSetupBar and bcN > 0
+if lowerTf and otherBc
     int bcEnd = bcT + setupSec * 1000
     box.new(bcT, bcH, bcEnd, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
-    bool sel = ccFor == "All BCs" or (selT >= bcT and selT < bcEnd)
+    bool sel = ccFor != "Selected BC" or (selT >= bcT and selT < bcEnd)
     if showCC and sel and not na(bcLvl)
-        line.new(bcT, bcLvl, bcEnd, bcLvl, xloc = xloc.bar_time, color = color.new(cSell, 30), style = line.style_dotted)
+        if ccFor == "Latest BC"
+            clearBlock()
+        else
+            array.clear(blkLabels)
+            array.clear(blkLines)
+        nSearch  := false
+        ltSearch := false
+        array.push(blkLines, line.new(bcT, bcLvl, bcEnd, bcLvl, xloc = xloc.bar_time, color = color.new(cSell, 30), style = line.style_dotted))
         // CC = oldest candle inside BC that closes (or trades) below R's low
         int ratio = math.max(1, math.round(setupSec / timeframe.in_seconds()))
         int cc = na
@@ -181,7 +217,7 @@ if lowerTf and newSetupBar and bcN > 0
                     cc := i
                     break
         if not na(cc)
-            label.new(bar_index - cc, high[cc], "CC", style = label.style_label_down, color = cCC, textcolor = color.white, size = size.tiny)
+            array.push(blkLabels, label.new(bar_index - cc, high[cc], "CC", style = label.style_label_down, color = cCC, textcolor = color.white, size = size.tiny))
             // NCC among the candles already closed after CC
             int nc = na
             if cc >= 2
@@ -189,19 +225,22 @@ if lowerTf and newSetupBar and bcN > 0
                     if high[j] >= bcLvl - nccTol
                         nc := j
                         break
-            ltSearch := false
             if not na(nc)
-                drawNcc(nc)
-                nSearch := false
+                [a2, b2] = drawNcc(nc)
+                ncHi := a2
+                ncLo := b2
                 int lt = ltFind(nc, high[nc])
                 if not na(lt)
                     drawLt(lt)
+                    line.set_x2(ncHi, bar_index - lt)
+                    line.set_x2(ncLo, bar_index - lt)
                 else
                     ltSearch := true
                     ltLvl    := high[nc]
                     ltStart  := bar_index - nc
+                    line.set_x2(ncHi, bar_index)
+                    line.set_x2(ncLo, bar_index)
             else
-                // keep checking the next candles as they close
                 nSearch := true
                 nLvl    := bcLvl
                 nCCBar  := bar_index - cc
