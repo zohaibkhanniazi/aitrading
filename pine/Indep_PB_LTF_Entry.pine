@@ -118,7 +118,7 @@ if not na(lnH1)
     line.set_x2(lnH1, time)
 if newHtfBar and hSig
     box.new(h4Time, h4High, h4Time + dur, h4Low, xloc = xloc.bar_time, border_color = cSell, border_width = 3, bgcolor = color.new(cSell, 75))
-    label.new(h4Time + dur / 2, h4High, "4  " + htf + " close below 2 = SELL bias", xloc = xloc.bar_time, style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
+    label.new(h4Time + math.round(dur / 2), h4High, "4  " + htf + " close below 2 = SELL bias", xloc = xloc.bar_time, style = label.style_label_down, color = cSell, textcolor = color.white, size = size.small)
     lnH1 := na
 
 // ---------------------------------------------------------------- trades + stats
