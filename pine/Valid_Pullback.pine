@@ -4,14 +4,17 @@
 //   WITHOUT taking the red candle's LOW. If it also takes the low -> not valid.
 // BEARISH valid pullback: mirror image (a green candle, then the next candle takes its LOW
 //   without taking its HIGH).
+// The pullback candle must be INDEPENDENT: its high/low are its own, i.e. it is not an inside
+//   candle sitting within the previous candle's range.
 //@version=5
 indicator("Valid Pullback (sweep / break of the pullback candle)", shorttitle = "Valid PB", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_bars_back = 500)
 
 needColor   = input.bool(true, "Sweeping candle must be the opposite colour (green after red, red after green)")
 showBull    = input.bool(true, "Bullish pullbacks (red candle, high taken)")
 showBear    = input.bool(true, "Bearish pullbacks (green candle, low taken)")
-showInvalid = input.bool(true, "Mark invalid ones (both high and low taken) with a grey x")
+showInvalid = input.bool(true, "Mark invalid ones (grey x = both high and low taken, grey 'in' = pullback candle was an inside candle)")
 showBox     = input.bool(true, "Box around the pullback candle")
+indepMode   = input.string("Not inside the previous candle", "Pullback candle must be independent", options = ["Not inside the previous candle", "Own high AND own low (outside candle)", "Off"], tooltip = "Not inside = its high is above, or its low is below, the candle before it. Own high AND low = both beyond the candle before it (strict).")
 cBull       = input.color(#089981, "Bullish colour")
 cBear       = input.color(#F23645, "Bearish colour")
 
@@ -20,21 +23,27 @@ isGreen1 = close[1] > open[1]
 isGreen0 = close > open
 isRed0   = close < open
 
+// ---- the pullback candle (candle 1) must have its own high / low
+insidePrev = high[1] <= high[2] and low[1] >= low[2]
+indep1 = indepMode == "Off" ? true : indepMode == "Not inside the previous candle" ? not insidePrev : (high[1] > high[2] and low[1] < low[2])
+
 // ---- bullish: previous candle red, this candle takes its high
 takesHigh  = high > high[1]
 takesLow   = low < low[1]
 bullCand   = showBull and isRed1 and takesHigh and (not needColor or isGreen0)
-bullValid  = bullCand and not takesLow
+bullValid  = bullCand and not takesLow and indep1
 bullBreak  = bullValid and close > high[1]
 bullSweep  = bullValid and close <= high[1]
 bullBad    = bullCand and takesLow
+bullDep    = bullCand and not takesLow and not indep1
 
 // ---- bearish: previous candle green, this candle takes its low
 bearCand   = showBear and isGreen1 and takesLow and (not needColor or isRed0)
-bearValid  = bearCand and not takesHigh
+bearValid  = bearCand and not takesHigh and indep1
 bearBreak  = bearValid and close < low[1]
 bearSweep  = bearValid and close >= low[1]
 bearBad    = bearCand and takesHigh
+bearDep    = bearCand and not takesHigh and not indep1
 
 // marks on the candle that took the level
 plotshape(bullBreak, "Bullish PB (break)", shape.triangleup, location.belowbar, cBull, text = "PB break", textcolor = cBull, size = size.tiny)
@@ -43,6 +52,8 @@ plotshape(bearBreak, "Bearish PB (break)", shape.triangledown, location.abovebar
 plotshape(bearSweep, "Bearish PB (sweep)", shape.triangledown, location.abovebar, color.new(cBear, 40), text = "PB sweep", textcolor = cBear, size = size.tiny)
 plotshape(showInvalid and bullBad, "Not valid (bullish)", shape.xcross, location.belowbar, color.gray, size = size.tiny)
 plotshape(showInvalid and bearBad, "Not valid (bearish)", shape.xcross, location.abovebar, color.gray, size = size.tiny)
+plotshape(showInvalid and bullDep, "Not valid: inside candle (bullish)", shape.circle, location.belowbar, color.gray, text = "in", textcolor = color.gray, size = size.tiny)
+plotshape(showInvalid and bearDep, "Not valid: inside candle (bearish)", shape.circle, location.abovebar, color.gray, text = "in", textcolor = color.gray, size = size.tiny)
 
 // box around the pullback candle itself (the red / green candle whose level was taken)
 if showBox and bullValid
