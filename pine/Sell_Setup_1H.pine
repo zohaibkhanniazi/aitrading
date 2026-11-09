@@ -7,8 +7,11 @@
 // 4. BC (break candle) = a candle closes below R's low.
 // 5. No cancel: a close above the sweep high does not cancel; keep waiting for the close below.
 // 6. Several valid pullbacks can wait at once (newest = main). A close below several lows counts for all of them.
-// On the 1H chart: full marking. On a lower chart (3m / 5m): the range of each BC candle is highlighted, and the
-// valid pullbacks of the lower chart (same rules) that happen inside that BC candle are numbered h1, h2, h3...
+// On the 1H chart: full marking. On a lower chart (3m / 5m), only:
+//   - the range of each BC candle,
+//   - CC  = the lower-chart candle inside BC that closes below R's low (the exact break),
+//   - NCC = the very next candle; horizontal lines at its high and low.
+//   (optional: numbered lower-chart pullbacks h1, h2, ... inside BC)
 //@version=5
 indicator("Sell Setup 1H (pullback sweep + BC)", shorttitle = "Sell Setup", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
 
@@ -17,7 +20,11 @@ greyInside = input.bool(true, "Grey out inside candles (setup chart only)")
 maxActive  = input.int(20, "Max setups waiting at once (oldest dropped)", minval = 1, maxval = 100)
 cSell      = input.color(#F23645, "BC / pullback colour")
 cGreen     = input.color(#089981, "Sweep colour")
-showH      = input.bool(true, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
+showCC     = input.bool(true, "Lower chart: mark CC (exact break candle) and NCC (next candle) with lines")
+ccMode     = input.string("Close below", "CC = first candle that", options = ["Close below", "Trades below (wick)"], tooltip = "...the level of R's low (the 1H level BC closed below)")
+nccBars    = input.int(60, "NCC lines length (candles)", minval = 5, maxval = 400)
+cCC        = input.color(#2962FF, "CC / NCC colour")
+showH      = input.bool(false, "Lower chart: number the valid pullbacks inside each BC candle (h1, h2, ...)")
 earlyR     = input.bool(false, "Lower chart: the red candle may start before the BC candle (only the sweep must be inside)")
 cH_        = input.color(#FF9800, "h1 / h2 / h3 colour")
 
@@ -35,12 +42,15 @@ bcLogic() =>
     var float cH   = na
     var float cL   = na
     var array<float> lv = array.new<float>()
-    bool ins = not na(refH) and high <= refH and low >= refL
-    int  n   = 0
+    bool  ins = not na(refH) and high <= refH and low >= refL
+    int   n   = 0
+    float hit = na
     if array.size(lv) > 0
         for i = array.size(lv) - 1 to 0
-            if close < array.get(lv, i)
+            float v = array.get(lv, i)
+            if close < v
                 n += 1
+                hit := na(hit) ? v : math.max(hit, v)
                 array.remove(lv, i)
     if not ins
         if cAct
@@ -60,9 +70,9 @@ bcLogic() =>
         refH := high
         refL := low
     // last CLOSED setup candle (no repainting)
-    [n[1], high[1], low[1], time[1]]
+    [n[1], high[1], low[1], time[1], hit[1]]
 
-[bcN, bcH, bcL, bcT] = request.security(syminfo.tickerid, setupTf, bcLogic(), lookahead = barmerge.lookahead_on)
+[bcN, bcH, bcL, bcT, bcLvl] = request.security(syminfo.tickerid, setupTf, bcLogic(), lookahead = barmerge.lookahead_on)
 bool newSetupBar = ta.change(bcT) != 0
 
 // valid pullbacks on the lower chart itself (same rules), remembered so they can be numbered inside a BC candle
@@ -102,9 +112,37 @@ if lowerTf and not l3Inside
     l3RefH := high
     l3RefL := low
 
+var bool nccPend = false
+if lowerTf and nccPend
+    // NCC was still forming when BC was confirmed: it is the candle that just closed
+    line.new(bar_index - 1, high[1], bar_index - 1 + nccBars, high[1], color = cCC, width = 2)
+    line.new(bar_index - 1, low[1], bar_index - 1 + nccBars, low[1], color = cCC, width = 2)
+    label.new(bar_index - 1, low[1], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
+    nccPend := false
+
 if lowerTf and newSetupBar and bcN > 0
     int bcEnd = bcT + setupSec * 1000
     box.new(bcT, bcH, bcEnd, bcL, xloc = xloc.bar_time, border_color = cSell, border_width = 2, bgcolor = color.new(cSell, 85), text = bcN > 1 ? "BC x" + str.tostring(bcN) : "BC", text_color = cSell, text_size = size.small, text_valign = text.align_top, text_halign = text.align_left)
+    if showCC and not na(bcLvl)
+        line.new(bcT, bcLvl, bcEnd, bcLvl, xloc = xloc.bar_time, color = color.new(cSell, 30), style = line.style_dotted)
+        // CC = oldest candle inside BC that closes (or trades) below R's low
+        int ratio = math.max(1, math.round(setupSec / timeframe.in_seconds()))
+        int cc = na
+        for i = math.min(ratio, 400) to 1
+            if time[i] >= bcT and time[i] < bcEnd
+                bool brk = ccMode == "Close below" ? close[i] < bcLvl : low[i] < bcLvl
+                if brk
+                    cc := i
+                    break
+        if not na(cc)
+            label.new(bar_index - cc, high[cc], "CC", style = label.style_label_down, color = cCC, textcolor = color.white, size = size.tiny)
+            if cc >= 2
+                int nc = cc - 1
+                line.new(bar_index - nc, high[nc], bar_index - nc + nccBars, high[nc], color = cCC, width = 2)
+                line.new(bar_index - nc, low[nc], bar_index - nc + nccBars, low[nc], color = cCC, width = 2)
+                label.new(bar_index - nc, low[nc], "NCC", style = label.style_label_up, color = cCC, textcolor = color.white, size = size.tiny)
+            else
+                nccPend := true
     if showH and array.size(pbs) > 0
         int k = 0
         for i = 0 to array.size(pbs) - 1
