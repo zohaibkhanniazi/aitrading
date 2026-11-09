@@ -1,0 +1,196 @@
+// Sweep & Close-Through -- part of zohaibkhanniazi/aitrading
+// SELL: a green candle takes (sweeps or breaks) the high of a red candle, then a later candle
+//       closes its body below that red candle -> sell. Cancelled if a candle closes above the
+//       sweep high. A newer sweep replaces the older setup (latest scenario only).
+// BUY : mirror image (a red candle takes a green candle's low, then a close above that green candle).
+//@version=5
+indicator("Sweep & Close-Through (latest setup)", shorttitle = "Sweep CT", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+G1 = "Pattern"
+lookback  = input.int(3, "Look for the red/green candle within (candles before the sweep)", minval = 1, maxval = 20, group = G1)
+sweepMode = input.string("Sweep or break", "Sweep candle", options = ["Sweep or break", "Sweep only (wick)", "Break only (close)"], group = G1)
+levelMode = input.string("Low / high", "Close must go beyond the candle's", options = ["Low / high", "Body"], group = G1, tooltip = "Low / high = beyond the whole red (green) candle including its wick. Body = beyond its close.")
+expiry    = input.int(20, "Setup expires after (candles)", minval = 1, group = G1)
+showSells = input.bool(true, "Sell setups", group = G1)
+showBuys  = input.bool(true, "Buy setups", group = G1)
+
+G2 = "Trade"
+rr        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = G2)
+slBuf     = input.float(0.1, "Stop buffer beyond the sweep (x ATR 14)", minval = 0, step = 0.05, group = G2)
+showStats = input.bool(true, "Results table", group = G2)
+cBull     = input.color(#089981, "Buy", group = G2, inline = "c")
+cBear     = input.color(#F23645, "Sell", group = G2, inline = "c")
+
+type Trade
+    int   dir
+    float entry
+    float sl
+    float tp
+    int   bar
+    line  le
+    line  ls
+    line  lt
+    label lb
+
+type Stats
+    int   trades = 0
+    int   wins = 0
+    int   losses = 0
+    float netR = 0.0
+
+// offset of the most recent red (wantRed) or green candle among the previous `lookback` candles
+findCandle(bool wantRed) =>
+    int off = na
+    for i = 1 to lookback
+        bool ok = wantRed ? close[i] < open[i] : close[i] > open[i]
+        if ok
+            off := i
+            break
+    off
+
+modeOk(bool closedBeyond) =>
+    sweepMode == "Sweep or break" ? true : sweepMode == "Sweep only (wick)" ? not closedBeyond : closedBeyond
+
+openTrade(array<Trade> ts, Stats st, int dir, float entry, float sl, float tp) =>
+    line le = line.new(bar_index, entry, bar_index + 1, entry, color = color.new(#2962FF, 0), width = 2)
+    line ls = line.new(bar_index, sl, bar_index + 1, sl, color = cBear, style = line.style_dashed)
+    line lt = line.new(bar_index, tp, bar_index + 1, tp, color = cBull, style = line.style_dashed)
+    string txt = (dir == 1 ? "BUY" : "SELL") + "\nE " + str.tostring(entry, format.mintick) + "  SL " + str.tostring(sl, format.mintick) + "  TP " + str.tostring(tp, format.mintick)
+    label lb = label.new(bar_index, sl, txt, style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? cBull : cBear, textcolor = color.white, size = size.small)
+    array.push(ts, Trade.new(dir, entry, sl, tp, bar_index, le, ls, lt, lb))
+    st.trades := st.trades + 1
+    alert(txt + " on " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar_close)
+    true
+
+updateTrades(array<Trade> ts, Stats st) =>
+    int n = array.size(ts)
+    if n > 0
+        for i = n - 1 to 0
+            Trade t = array.get(ts, i)
+            if t.bar == bar_index
+                continue
+            bool hitSl = t.dir == 1 ? low <= t.sl : high >= t.sl
+            bool hitTp = t.dir == 1 ? high >= t.tp : low <= t.tp
+            if hitSl or hitTp
+                bool win = hitTp and not hitSl
+                st.netR := st.netR + (win ? rr : -1.0)
+                if win
+                    st.wins := st.wins + 1
+                else
+                    st.losses := st.losses + 1
+                line.set_x2(t.le, bar_index)
+                line.set_x2(t.ls, bar_index)
+                line.set_x2(t.lt, bar_index)
+                label.set_text(t.lb, label.get_text(t.lb) + (win ? "\nTP hit" : "\nSL hit"))
+                array.remove(ts, i)
+            else
+                line.set_x2(t.le, bar_index + 1)
+                line.set_x2(t.ls, bar_index + 1)
+                line.set_x2(t.lt, bar_index + 1)
+    true
+
+atr = ta.atr(14)
+redOff   = findCandle(true)
+greenOff = findCandle(false)
+
+var array<Trade> trades = array.new<Trade>()
+var Stats stats = Stats.new()
+
+// sell setup state (green candle took a red candle's high)
+var bool  sAct  = false
+var float sLvl  = na
+var float sExt  = na
+var int   sBorn = na
+var line  sLine = na
+// buy setup state (red candle took a green candle's low)
+var bool  bAct  = false
+var float bLvl  = na
+var float bExt  = na
+var int   bBorn = na
+var line  bLine = na
+
+bool sellSig = false
+bool buySig  = false
+float sellSl = na
+float buySl  = na
+
+// 1. existing setups: trigger, cancel or keep waiting
+if sAct
+    if close < sLvl
+        sellSig := true
+        sellSl := math.max(sExt, high) + slBuf * atr
+        sAct := false
+        line.set_x2(sLine, bar_index)
+    else if close > sExt or bar_index - sBorn > expiry
+        sAct := false
+        line.set_x2(sLine, bar_index)
+        line.set_color(sLine, color.new(color.gray, 50))
+    else
+        sExt := math.max(sExt, high)
+        line.set_x2(sLine, bar_index)
+if bAct
+    if close > bLvl
+        buySig := true
+        buySl := math.min(bExt, low) - slBuf * atr
+        bAct := false
+        line.set_x2(bLine, bar_index)
+    else if close < bExt or bar_index - bBorn > expiry
+        bAct := false
+        line.set_x2(bLine, bar_index)
+        line.set_color(bLine, color.new(color.gray, 50))
+    else
+        bExt := math.min(bExt, low)
+        line.set_x2(bLine, bar_index)
+
+// 2. new setup on this candle (replaces the previous one = latest scenario)
+int rO = nz(redOff, 1)
+int gO = nz(greenOff, 1)
+bool newSell = showSells and close > open and not na(redOff) and high > high[rO] and modeOk(close > high[rO]) and not sellSig
+bool newBuy  = showBuys and close < open and not na(greenOff) and low < low[gO] and modeOk(close < low[gO]) and not buySig
+if newSell
+    if sAct
+        line.set_x2(sLine, bar_index)
+        line.set_color(sLine, color.new(color.gray, 50))
+    sAct  := true
+    sLvl  := levelMode == "Low / high" ? low[rO] : close[rO]
+    sExt  := high
+    sBorn := bar_index
+    sLine := line.new(bar_index - rO, sLvl, bar_index, sLvl, color = cBear, style = line.style_dashed, width = 2)
+    label.new(bar_index, high, close > high[rO] ? "break" : "sweep", style = label.style_label_down, color = color(na), textcolor = cBear, size = size.tiny)
+if newBuy
+    if bAct
+        line.set_x2(bLine, bar_index)
+        line.set_color(bLine, color.new(color.gray, 50))
+    bAct  := true
+    bLvl  := levelMode == "Low / high" ? high[gO] : close[gO]
+    bExt  := low
+    bBorn := bar_index
+    bLine := line.new(bar_index - gO, bLvl, bar_index, bLvl, color = cBull, style = line.style_dashed, width = 2)
+    label.new(bar_index, low, close < low[gO] ? "break" : "sweep", style = label.style_label_up, color = color(na), textcolor = cBull, size = size.tiny)
+
+// 3. trades
+if sellSig and close < sellSl
+    openTrade(trades, stats, -1, close, sellSl, close - rr * (sellSl - close))
+if buySig and close > buySl
+    openTrade(trades, stats, 1, close, buySl, close + rr * (close - buySl))
+updateTrades(trades, stats)
+
+var int firstTime = time
+var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast and showStats
+    int closed = stats.wins + stats.losses
+    table.cell(tb, 0, 0, "Trades", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, str.tostring(stats.trades), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Wins / losses", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(stats.wins) + " / " + str.tostring(stats.losses), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Win rate", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, closed > 0 ? str.tostring(100.0 * stats.wins / closed, "#.0") + "%" : "-", text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Net R (" + str.tostring(rr) + "R target)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 3, str.tostring(stats.netR, "#.0") + "R", text_color = stats.netR >= 0 ? cBull : cBear, text_size = size.small)
+    table.cell(tb, 0, 4, "Since", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 4, str.format_time(firstTime, "yyyy-MM-dd", syminfo.timezone), text_color = color.white, text_size = size.small)
+
+plotshape(sellSig, "Sell", shape.triangledown, location.abovebar, cBear, size = size.small)
+plotshape(buySig, "Buy", shape.triangleup, location.belowbar, cBull, size = size.small)
+alertcondition(sellSig, "Sell signal", "Sweep & close-through SELL on {{ticker}} {{interval}}")
+alertcondition(buySig, "Buy signal", "Sweep & close-through BUY on {{ticker}} {{interval}}")
