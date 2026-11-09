@@ -1,7 +1,9 @@
 // Independent Candle Pullback: H1 setup -> 3m entry (SELL) -- part of zohaibkhanniazi/aitrading
 // H1 (setup TF): 1 independent candle -> 2 red candle out of it -> 3 takes 2's high (not its low)
 //                -> 4 closes below 2's low  = SELL BIAS (no trade yet).
-// 3m (chart TF): point 10 = last 3m swing high made inside H1 candle 4 before it closed.
+// 3m (chart TF): point 10 = while H1 candle 4 is still open, a green 3m candle closes back ABOVE
+//                candle 2's low (the breaker line); the highest high from that green candle until
+//                candle 4 closes is point 10 (latest such green candle counts).
 //                A green 3m candle sweeps point 10 (latest sweep counts) ->
 //                a 3m candle closes below that sweep candle's low = SELL.
 //                Stop above the sweep high, target RR x stop.
@@ -17,7 +19,8 @@ needGreen    = input.bool(true, "Candle 3 must be green", group = G1)
 expiryH      = input.int(30, "Setup pullback expires after (setup candles)", minval = 1, group = G1)
 
 G2 = "Entry (chart timeframe)"
-p10Mode   = input.string("Last swing high inside candle 4", "Point 10", options = ["Last swing high inside candle 4", "High of candle 4"], group = G2)
+p10Mode   = input.string("Retest high (green close above candle 2 low)", "Point 10", options = ["Retest high (green close above candle 2 low)", "Last swing high inside candle 4", "High of candle 4"], group = G2)
+p10Skip   = input.bool(false, "Retest mode: skip the setup if no green candle closed above the line", group = G2, tooltip = "Off = fall back to the last swing high inside candle 4 (marked 10*).")
 sweepGrn  = input.bool(true, "Sweep candle must be green", group = G2)
 waitH     = input.int(24, "Wait for the entry up to (setup candles after candle 4)", minval = 1, group = G2)
 rr        = input.float(3.0, "Target (R multiple)", minval = 0.5, step = 0.5, group = G2)
@@ -107,10 +110,32 @@ var line  lnLvl  = na
 int ratio = math.max(1, math.round(timeframe.in_seconds(htf) / timeframe.in_seconds()))
 
 if newSetup
-    // point 10: last swing high (higher than its neighbours) inside candle 4, before it closed
+    // point 10 (see header); fallback = last swing high inside candle 4
     float found = na
     int   fOff  = na
-    if p10Mode == "Last swing high inside candle 4"
+    string tag  = "10"
+    bool  skip  = false
+    if p10Mode == "Retest high (green close above candle 2 low)"
+        // latest green 3m candle inside candle 4 that closed above candle 2's low
+        int gOff = na
+        for i = 1 to math.min(ratio + 1, 900)
+            if time[i] < h4Time
+                break
+            if close[i] > open[i] and close[i] > hLvl
+                gOff := i
+                break
+        if not na(gOff)
+            found := high[gOff]
+            fOff  := gOff
+            for j = 1 to gOff
+                if high[j] > found
+                    found := high[j]
+                    fOff  := j
+        else if p10Skip
+            skip := true
+        else
+            tag := "10*"
+    if na(found) and not skip and p10Mode != "High of candle 4"
         for i = 2 to math.min(ratio + 2, 900)
             if time[i] < h4Time
                 break
@@ -121,17 +146,18 @@ if newSetup
     if na(found)
         found := h4High
         fOff  := na
-    lAct   := true
+    lAct   := not skip
     p10    := found
     lvl2   := hLvl
     pbHigh := hPB
     lStart := bar_index
     sAct   := false
-    label.new(bar_index, high, "H1 sell setup", style = label.style_label_down, color = color.new(cSell, 20), textcolor = color.white, size = size.tiny)
-    if not na(fOff)
-        label.new(bar_index - fOff, p10, "10", style = label.style_label_down, color = color.new(#FF9800, 0), textcolor = color.white, size = size.tiny)
-    lnP10 := line.new(na(fOff) ? bar_index : bar_index - fOff, p10, bar_index, p10, color = #FF9800, style = line.style_dashed, width = 2)
-    lnLvl := line.new(bar_index, lvl2, bar_index, lvl2, color = color.new(cSell, 40), style = line.style_dotted)
+    label.new(bar_index, high, skip ? "H1 setup skipped (no retest)" : "H1 sell setup", style = label.style_label_down, color = color.new(skip ? color.gray : cSell, 20), textcolor = color.white, size = size.tiny)
+    if not skip
+        if not na(fOff)
+            label.new(bar_index - fOff, p10, tag, style = label.style_label_down, color = color.new(#FF9800, 0), textcolor = color.white, size = size.tiny)
+        lnP10 := line.new(na(fOff) ? bar_index : bar_index - fOff, p10, bar_index, p10, color = #FF9800, style = line.style_dashed, width = 2)
+        lnLvl := line.new(bar_index, lvl2, bar_index, lvl2, color = color.new(cSell, 40), style = line.style_dotted)
 
 bool sell = false
 if lAct
