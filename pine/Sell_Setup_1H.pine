@@ -48,7 +48,7 @@ swingConf  = input.int(1,
   "Liquidity swing high confirmed after (candles without a higher high)", minval = 1,
   maxval = 10)
 nccltGreen = input.bool(true, "NCCLT must be a green candle",
-  tooltip = "A red candle that takes the liquidity is skipped")
+  tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
 rrE        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5,
@@ -265,6 +265,7 @@ type Block
     int   ncBar
     float ncL
     float swH      // liquidity = highest high of the NCC swing
+    float    need
     int   swBar
     int   conf
     line  lnH
@@ -300,12 +301,17 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             if b.conf >= swingConf
                 b.lnH   := line.new(b.swBar, b.swH, x, b.swH, color = cCC, width = 2)
                 b.lnL   := line.new(b.ncBar, b.ncL, x, b.ncL, color = cCC, width = 2)
+                b.need  := b.swH
                 b.stage := 2
     else if b.stage == 2
         // NCCLT: first candle after the BC hour that takes the liquidity; lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)
-        if high[off] > b.swH and time[off] >= b.endT and (not nccltGreen or close[off] > open[off])
+        // a red candle that takes the liquidity is not NCCLT: its high becomes the level a
+        // green candle has to take
+        if high[off] > b.need and time[off] >= b.endT and nccltGreen and close[off] <= open[off]
+            b.need := high[off]
+        else if high[off] > b.need and time[off] >= b.endT
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT,
               textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]

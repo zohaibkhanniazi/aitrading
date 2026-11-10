@@ -34,7 +34,7 @@ input bool   InpCcWick      = false;  // CC = first candle trading below (false 
 input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
-input bool   InpNcclGreen   = true;   // NCCLT must be a green candle (a red one taking liquidity is skipped)
+input bool   InpNcclGreen   = true;   // NCCLT must be green; a red candle taking the level raises it to its high
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -74,6 +74,7 @@ struct Block
    datetime ltT;
    datetime swT;     // candle of the liquidity high
    double   ncL;     // NCC low
+   double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
    datetime rT;      // 1H setup behind the BC: R candle, its low, pullback candle,
    double   rL;      //   how often the level shifted (and when last), setups closed below
    datetime pT;
@@ -539,13 +540,20 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       else
       {
          b.conf++;
-         if(b.conf >= InpSwingConf) b.stage = 2;
+         if(b.conf >= InpSwingConf)
+         {
+            b.need = b.swH;
+            b.stage = 2;
+         }
       }
    }
    else if(b.stage == 2)
    {
       // NCCLT: first candle after the BC hour that takes the liquidity
-      if(r.high > b.swH && r.time >= b.endT && (!InpNcclGreen || r.close > r.open))
+      // a red candle that takes the level is not NCCLT: its high becomes the level to take
+      if(r.high > b.need && r.time >= b.endT && InpNcclGreen && r.close <= r.open)
+         b.need = r.high;
+      else if(r.high > b.need && r.time >= b.endT)
       {
          b.ltH = r.high;
          b.ltL = r.low;
@@ -613,6 +621,7 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.ltT = 0;
    b.swT = 0;
    b.ncL = 0;
+   b.need = 0;
    b.rT = hRT;
    b.rL = hRL;
    b.pT = hPT;
