@@ -73,6 +73,12 @@ struct Block
    datetime ltT;
    datetime swT;     // candle of the liquidity high
    double   ncL;     // NCC low
+   datetime rT;      // 1H setup behind the BC: R candle, its low, pullback candle,
+   double   rL;      //   how often the level shifted (and when last), setups closed below
+   datetime pT;
+   int      nSh;
+   datetime shT;
+   int      nSet;
 };
 
 struct VTrade
@@ -97,7 +103,16 @@ bool     refSet = false;
 double   refH = 0, refL = 0;
 bool     cAct = false;
 double   cH = 0, cL = 0;
+datetime cT = 0;            // open time of the current R candle
 double   lv[];              // breaker levels waiting for a BC
+datetime lvRT[];            // per level: R candle time, R low, pullback candle time,
+double   lvRL[];            //   number of wick-to-wick shifts, time of the last shift
+datetime lvPT[];
+int      lvSh[];
+datetime lvST[];
+datetime hRT = 0, hPT = 0, hST = 0;  // setup of the highest level the last BC closed below
+double   hRL = 0;
+int      hSh = 0;
 Block    blocks[];
 VTrade   vt[];
 // funnel
@@ -219,6 +234,16 @@ void DrawBox(const datetime t1, const double p1, const datetime t2, const double
 //| returns how many waiting levels this candle closed below; hit =   |
 //| the highest of those levels                                       |
 //+------------------------------------------------------------------+
+void LvRemove(const int i)
+{
+   ArrayRemove(lv, i, 1);
+   ArrayRemove(lvRT, i, 1);
+   ArrayRemove(lvRL, i, 1);
+   ArrayRemove(lvPT, i, 1);
+   ArrayRemove(lvSh, i, 1);
+   ArrayRemove(lvST, i, 1);
+}
+
 int SetupCandle(const MqlRates &r, double &hit)
 {
    nSetup++;
@@ -230,11 +255,23 @@ int SetupCandle(const MqlRates &r, double &hit)
       if(r.close < lv[i])
       {
          n++;
-         hit = (n == 1) ? lv[i] : MathMax(hit, lv[i]);
-         ArrayRemove(lv, i, 1);
+         if(n == 1 || lv[i] > hit)
+         {
+            hit = lv[i];
+            hRT = lvRT[i];
+            hRL = lvRL[i];
+            hPT = lvPT[i];
+            hSh = lvSh[i];
+            hST = lvST[i];
+         }
+         LvRemove(i);
       }
       else if(InpShiftLow && r.low < lv[i])
+      {
          lv[i] = r.low;
+         lvSh[i]++;
+         lvST[i] = r.time;
+      }
    }
    if(ins)
    {
@@ -249,11 +286,21 @@ int SetupCandle(const MqlRates &r, double &hit)
       {
          int s = ArraySize(lv);
          ArrayResize(lv, s + 1);
+         ArrayResize(lvRT, s + 1);
+         ArrayResize(lvRL, s + 1);
+         ArrayResize(lvPT, s + 1);
+         ArrayResize(lvSh, s + 1);
+         ArrayResize(lvST, s + 1);
          lv[s] = cL;
+         lvRT[s] = cT;
+         lvRL[s] = cL;
+         lvPT[s] = r.time;
+         lvSh[s] = 0;
+         lvST[s] = 0;
          nValid++;
          if(ArraySize(lv) > InpMaxActive)
          {
-            ArrayRemove(lv, 0, 1);
+            LvRemove(0);
             nDrop++;
          }
          cAct = false;
@@ -266,6 +313,7 @@ int SetupCandle(const MqlRates &r, double &hit)
       cAct = true;
       cH = r.high;
       cL = r.low;
+      cT = r.time;
    }
    refSet = true;
    refH = r.high;
@@ -400,9 +448,10 @@ void OnSellSignal(const MqlRates &r, const Block &b)
    for(int k = 0; k < NR; k++) { vt[s].res[k] = 0; vt[s].xt[k] = 0; }
    int yi = dt.year - Y0;
    if(yi >= 0 && yi < NY) yN[yi]++;
-   PrintFormat("SIG %s entry %.2f SL %.2f stop %.2f spread %.2f | BC %s level %.2f | CC %s | NCC %s | liquidity %.2f | NCCLT %s low %.2f",
+   PrintFormat("SIG %s entry %.2f SL %.2f stop %.2f spread %.2f | BC %s level %.2f | CC %s | NCC %s | liquidity %.2f | NCCLT %s low %.2f | R %s low %.2f | PB %s | shifts %d last %s | setups %d",
                TimeToString(r.time), e, sl, risk, spread, TimeToString(b.bcT), b.lvl, TimeToString(b.ccT),
-               TimeToString(b.ncT), b.swH, TimeToString(b.ltT), b.ltL);
+               TimeToString(b.ncT), b.swH, TimeToString(b.ltT), b.ltL, TimeToString(b.rT), b.rL,
+               TimeToString(b.pT), b.nSh, b.shT > 0 ? TimeToString(b.shT) : "-", b.nSet);
    if(gDraw)
    {
       datetime t2 = r.time + 20 * PeriodSeconds(_Period);
@@ -525,7 +574,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
 }
 
 // a setup candle closed below one or more levels: BC block, CC, catch up to now
-void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed)
+void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const int nSetups)
 {
    nBc++;
    datetime bcT = h.time;
@@ -563,6 +612,12 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed)
    b.ltT = 0;
    b.swT = 0;
    b.ncL = 0;
+   b.rT = hRT;
+   b.rL = hRL;
+   b.pT = hPT;
+   b.nSh = hSh;
+   b.shT = hST;
+   b.nSet = nSetups;
    datetime ccT = lr[cc].time;
    b.ccT = ccT;
    if(lastClosed > ccT)
@@ -624,7 +679,7 @@ void OnTick()
          double hit = 0;
          int n = SetupCandle(hr[j], hit);
          lastSetup = hr[j].time;
-         if(n > 0) NewBc(hr[j], hit, r1[0].time);
+         if(n > 0) NewBc(hr[j], hit, r1[0].time, n);
       }
    }
 }
