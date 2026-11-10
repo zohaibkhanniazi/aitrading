@@ -49,6 +49,8 @@ swingConf  = input.int(1,
   maxval = 10)
 nccltGreen = input.bool(true, "NCCLT must be a green candle",
   tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
+retestIn   = input.bool(true, "Entry on retest of the NCCLT low",
+  tooltip = "After a candle closes below the NCCLT low, sell when price comes back up to the NCCLT low")
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
 rrE        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5,
@@ -184,8 +186,8 @@ var array<Trade> trades = array.new<Trade>()
 var Stats stats = Stats.new(rw = array.new_int(5, 0), rl = array.new_int(5, 0))
 
 // SELL at the close of the candle `off` candles ago, stop at `sl`
-openTradeAt(array<Trade> ts, Stats st, int off, float sl) =>
-    float e  = close[off]
+openTradeAt(array<Trade> ts, Stats st, int off, float sl, float ePrice) =>
+    float e  = ePrice
     float tp = e - rrE * (sl - e)
     int   x  = bar_index - off
     string txt = "SELL\nEntry " + str.tostring(e,
@@ -197,7 +199,9 @@ openTradeAt(array<Trade> ts, Stats st, int off, float sl) =>
     line le = line.new(x, e, x + 1, e, color = color.new(#2962FF, 0), width = 2)
     line ls = line.new(x, sl, x + 1, sl, color = cSell, width = 2)
     line lt = line.new(x, tp, x + 1, tp, color = color.new(#089981, 0), width = 2)
-    array.push(ts, Trade.new(e, sl, tp, x, x, le, ls, lt, lb, false, array.new_int(5, 0)))
+    // entry candle that also reaches the stop: scanned too (stop first = loss)
+    int chk0 = high[off] >= sl and e != close[off] ? x - 1 : x
+    array.push(ts, Trade.new(e, sl, tp, x, chk0, le, ls, lt, lb, false, array.new_int(5, 0)))
     st.trades := st.trades + 1
     alert("SELL " + syminfo.ticker + "  entry " + str.tostring(e,
       format.mintick) + "  SL " + str.tostring(sl,
@@ -266,6 +270,7 @@ type Block
     float ncL
     float swH      // liquidity = highest high of the NCC swing
     float    need
+    bool     brk = false
     int   swBar
     int   conf
     line  lnH
@@ -318,10 +323,19 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.ltL   := low[off]
             b.stage := 3
     else if b.stage == 3
-        // SELL: first candle that closes below the NCCLT low; SL = NCCLT high
-        if close[off] < b.ltL
-            openTradeAt(ts, st, off, b.ltH)
+        // SELL: a candle closes below the NCCLT low; with retest entry, sell when a later
+        // candle comes back up to the NCCLT low. SL = NCCLT high
+        if retestIn and b.brk and high[off] >= b.ltL
+            openTradeAt(ts, st, off, b.ltH, b.ltL)
             b.stage := 4
+        else if close[off] < b.ltL and not b.brk
+            if retestIn
+                b.brk := true
+                label.new(x, low[off], "break", style = label.style_label_up, color = color(na),
+                  textcolor = cLT, size = size.tiny)
+            else
+                openTradeAt(ts, st, off, b.ltH, close[off])
+                b.stage := 4
     if b.stage < 4 and x - b.ccBar > nccMax
         b.stage := 4
     true

@@ -35,6 +35,7 @@ input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
 input bool   InpNcclGreen   = true;   // NCCLT must be green; a red candle taking the level raises it to its high
+input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -75,6 +76,8 @@ struct Block
    datetime swT;     // candle of the liquidity high
    double   ncL;     // NCC low
    double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
+   bool     brk;     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
+   ulong    tk;      // pending sell limit at the NCCLT low (real trade)
    datetime rT;      // 1H setup behind the BC: R candle, its low, pullback candle,
    double   rL;      //   how often the level shifted (and when last), setups closed below
    datetime pT;
@@ -408,9 +411,9 @@ void OpenSell(const double nccltHigh)
 }
 
 // SELL candle closed: score it on chart prices and open the real trade
-void OnSellSignal(const MqlRates &r, const Block &b)
+void OnSellSignal(const MqlRates &r, const Block &b, const double ePx, const bool retest)
 {
-   double e = r.close;
+   double e = ePx;
    double sl = b.ltH;
    if(InpSlMode == 1)
    {
@@ -464,7 +467,58 @@ void OnSellSignal(const MqlRates &r, const Block &b)
       DrawText(r.time, sl, StringFormat("SELL %.2f  SL %.2f (NCCLT high)  TP %.2f (%.0fR)", e, sl, tp, InpRR),
                clrRed, ANCHOR_LEFT_LOWER);
    }
+   if(retest)
+   {
+      // the retest candle itself may already reach the stop: loss (stop first)
+      if(r.high >= sl)
+      {
+         int q = ArraySize(vt) - 1;
+         string t2 = StringFormat("RES %s entry %.2f SL %.2f", TimeToString(vt[q].t), vt[q].e, vt[q].sl);
+         for(int k = 0; k < NR; k++)
+         {
+            vt[q].res[k] = -1;
+            vt[q].xt[k] = r.time;
+            lR[k]++;
+            if(yi >= 0 && yi < NY) yL[yi][k]++;
+            t2 += StringFormat(" | %.0fR LOSS %s", RL[k], TimeToString(r.time));
+         }
+         Print(t2);
+         RemoveVT(q);
+      }
+      return;                 // the real order is the sell limit placed at the break
+   }
    OpenSell(sl);
+}
+
+// retest entry: sell limit at the NCCLT low, placed when a candle closes below it
+ulong PlaceSellLimit(const double price, const double nccltHigh)
+{
+   if(!InpTrade) return 0;
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spread = ask - bid;
+   double sl = nccltHigh + (InpSlAddSpread ? spread : 0.0);
+   double dist = sl - price;
+   if(dist <= 0) { nSkip++; return 0; }
+   if(InpMinStop > 0 && dist < InpMinStop) { nSkip++; return 0; }
+   if(InpMaxStop > 0 && dist > InpMaxStop) { nSkip++; return 0; }
+   double lots = CalcLots(dist);
+   if(lots <= 0) { nSkip++; return 0; }
+   double tp = price - InpRR * dist;
+   bool ok;
+   if(bid < price - SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point)
+      ok = trade.SellLimit(lots, NormalizeDouble(price, _Digits), _Symbol, NormalizeDouble(sl, _Digits),
+                           NormalizeDouble(tp, _Digits), ORDER_TIME_GTC, 0, "SellSetup");
+   else
+      ok = trade.Sell(lots, _Symbol, 0.0, NormalizeDouble(sl, _Digits), NormalizeDouble(tp, _Digits), "SellSetup");
+   if(!ok) { nSkip++; return 0; }
+   nTrades++;
+   return trade.ResultOrder();
+}
+
+void CancelPending(const ulong tk)
+{
+   if(tk > 0 && OrderSelect(tk)) trade.OrderDelete(tk);
 }
 
 // chart-price scoring of every signal (stop first if both in one candle)
@@ -567,18 +621,38 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    }
    else if(b.stage == 3)
    {
-      // SELL: first candle that closes below the NCCLT low; SL = NCCLT high
-      if(r.close < b.ltL)
+      // SELL: a candle closes below the NCCLT low; with retest entry, sell when a later
+      // candle comes back up to the NCCLT low. SL = NCCLT high
+      if(InpRetest && b.brk)
       {
-         b.stage = 4;
-         if(live) OnSellSignal(r, b);
-         else     nLate++;
+         if(r.high >= b.ltL)
+         {
+            b.stage = 4;
+            if(live) OnSellSignal(r, b, b.ltL, true);
+            else     nLate++;
+         }
+      }
+      else if(r.close < b.ltL)
+      {
+         if(InpRetest)
+         {
+            b.brk = true;
+            DrawText(r.time, r.low, "break", clrMagenta, ANCHOR_UPPER);
+            if(live) b.tk = PlaceSellLimit(b.ltL, b.ltH);
+         }
+         else
+         {
+            b.stage = 4;
+            if(live) OnSellSignal(r, b, r.close, false);
+            else     nLate++;
+         }
       }
    }
    if(b.stage < 4 && b.since > InpNccMax)
    {
       b.stage = 4;
       nExp++;
+      CancelPending(b.tk);
    }
 }
 
@@ -622,6 +696,8 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.swT = 0;
    b.ncL = 0;
    b.need = 0;
+   b.brk = false;
+   b.tk = 0;
    b.rT = hRT;
    b.rL = hRL;
    b.pT = hPT;
