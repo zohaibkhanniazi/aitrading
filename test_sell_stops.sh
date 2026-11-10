@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sell Setup stop tests on 3m and 5m (about 5 years, XAUUSDm, target 2R, 1R = $100, test balance 100,000):
-#   1base  = SL at NCCLT high (your rules)
+#   1base  = SL at NCCLT high (your rules; NCCLT must be green)
 #   2big   = skip signals whose stop is more than 2x the usual stop
 #   3small = skip signals whose stop is less than 0.8x the usual stop
 #   4liq   = SL at the liquidity level + $0.30 instead of the NCCLT high

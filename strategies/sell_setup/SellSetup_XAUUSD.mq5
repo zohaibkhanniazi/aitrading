@@ -34,6 +34,7 @@ input bool   InpCcWick      = false;  // CC = first candle trading below (false 
 input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
+input bool   InpNcclGreen   = true;   // NCCLT must be a green candle (a red one taking liquidity is skipped)
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -544,7 +545,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    else if(b.stage == 2)
    {
       // NCCLT: first candle after the BC hour that takes the liquidity
-      if(r.high > b.swH && r.time >= b.endT)
+      if(r.high > b.swH && r.time >= b.endT && (!InpNcclGreen || r.close > r.open))
       {
          b.ltH = r.high;
          b.ltL = r.low;

@@ -47,6 +47,8 @@ nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minv
 swingConf  = input.int(1,
   "Liquidity swing high confirmed after (candles without a higher high)", minval = 1,
   maxval = 10)
+nccltGreen = input.bool(true, "NCCLT must be a green candle",
+  tooltip = "A red candle that takes the liquidity is skipped")
 cCC        = input.color(#2962FF, "CC / NCC colour")
 cLT        = input.color(#9C27B0, "NCCLT colour")
 rrE        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5,
@@ -303,7 +305,7 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         // NCCLT: first candle after the BC hour that takes the liquidity; lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)
-        if high[off] > b.swH and time[off] >= b.endT
+        if high[off] > b.swH and time[off] >= b.endT and (not nccltGreen or close[off] > open[off])
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT,
               textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]
