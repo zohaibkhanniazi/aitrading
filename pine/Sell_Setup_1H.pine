@@ -48,6 +48,7 @@ swingConf  = input.int(1,
   "Liquidity swing high confirmed after (candles without a higher high)", minval = 1,
   maxval = 10)
 nccGreen   = input.bool(true, "NCC must be a green candle")
+nccShift   = input.bool(true, "NCC moves to the next candle if it is green and higher")
 nccltGreen = input.bool(true, "NCCLT must be a green candle",
   tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
 wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below ends it)",
@@ -279,6 +280,9 @@ type Block
     int   ccBar
     int   ncBar
     float ncL
+    float ncH
+    bool  ncRun = false
+    label ncLb
     float swH      // liquidity = highest high of the NCC swing
     float    need
     bool     brk = false
@@ -300,13 +304,23 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         if high[off] >= b.lvl - nccTol and (not nccGreen or close[off] > open[off])
             b.ncBar := x
             b.ncL   := low[off]
+            b.ncH   := high[off]
+            b.ncRun := true
             b.swH   := high[off]
             b.swBar := x
             b.conf  := 0
-            label.new(x, low[off], "NCC", style = label.style_label_up, color = cCC,
+            b.ncLb  := label.new(x, low[off], "NCC", style = label.style_label_up, color = cCC,
               textcolor = color.white, size = size.tiny)
             b.stage := 1
     else if b.stage == 1
+        // the next candle green and higher: NCC moves to it (repeats while they keep going up)
+        if b.ncRun and nccShift and close[off] > open[off] and high[off] > b.ncH
+            b.ncBar := x
+            b.ncL   := low[off]
+            b.ncH   := high[off]
+            label.set_xy(b.ncLb, x, low[off])
+        else
+            b.ncRun := false
         // NCC swing: keep the highest high until swingConf candle(s) make no higher high
         if high[off] > b.swH
             b.swH   := high[off]

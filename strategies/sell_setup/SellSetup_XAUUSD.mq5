@@ -37,6 +37,7 @@ input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
+input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclGreen   = true;   // NCCLT must be green; a red candle taking the level raises it to its high
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input group "Stop"
@@ -78,6 +79,8 @@ struct Block
    datetime ltT;
    datetime swT;     // candle of the liquidity high
    double   ncL;     // NCC low
+   double   ncH;     // NCC high
+   bool     ncRun;   // NCC can still move to the next green, higher candle
    double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
    bool     brk;     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
    ulong    tk;      // pending sell limit at the NCCLT low (real trade)
@@ -588,6 +591,8 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          b.stage = 1;
          b.ncT = r.time;
          b.ncL = r.low;
+         b.ncH = r.high;
+         b.ncRun = true;
          b.swT = r.time;
          nNcc++;
          DrawText(r.time, r.low, "NCC", clrDodgerBlue, ANCHOR_UPPER);
@@ -595,6 +600,15 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    }
    else if(b.stage == 1)
    {
+      // the next candle green and higher: NCC moves to it (repeats while they keep going up)
+      if(b.ncRun && InpNccShift && r.close > r.open && r.high > b.ncH)
+      {
+         b.ncT = r.time;
+         b.ncL = r.low;
+         b.ncH = r.high;
+      }
+      else
+         b.ncRun = false;
       // NCC swing: keep the highest high until InpSwingConf candles make no higher high
       if(r.high > b.swH)
       {
@@ -706,6 +720,8 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.ltT = 0;
    b.swT = 0;
    b.ncL = 0;
+   b.ncH = 0;
+   b.ncRun = false;
    b.need = 0;
    b.brk = false;
    b.tk = 0;
