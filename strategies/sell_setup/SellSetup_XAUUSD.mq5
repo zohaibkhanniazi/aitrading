@@ -36,6 +36,7 @@ input bool   InpCcWick      = false;  // CC = first candle trading below (false 
 input double InpNccTol      = 0.0;    // NCC test tolerance (price)
 input int    InpNccMax      = 200;    // stop following a BC after this many candles
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
+input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNcclGreen   = true;   // NCCLT must be green; a red candle taking the level raises it to its high
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input group "Stop"
@@ -580,7 +581,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    if(b.stage == 0)
    {
       // NCC: first candle after CC that comes back up and tests the breaker point
-      if(r.high >= b.lvl - InpNccTol)
+      if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.close > r.open))
       {
          b.swH = r.high;
          b.conf = 0;

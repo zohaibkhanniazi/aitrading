@@ -47,6 +47,7 @@ nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minv
 swingConf  = input.int(1,
   "Liquidity swing high confirmed after (candles without a higher high)", minval = 1,
   maxval = 10)
+nccGreen   = input.bool(true, "NCC must be a green candle")
 nccltGreen = input.bool(true, "NCCLT must be a green candle",
   tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
 wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below ends it)",
@@ -295,8 +296,8 @@ var array<Block> blocks = array.new<Block>()
 stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     int x = bar_index - off
     if b.stage == 0
-        // NCC: first candle after CC that comes back up and tests the breaker point
-        if high[off] >= b.lvl - nccTol
+        // NCC: first GREEN candle after CC that comes back up and tests the breaking point
+        if high[off] >= b.lvl - nccTol and (not nccGreen or close[off] > open[off])
             b.ncBar := x
             b.ncL   := low[off]
             b.swH   := high[off]
