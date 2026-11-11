@@ -40,6 +40,7 @@ input bool   InpNccGreen    = true;   // NCC must be a green candle that retests
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
+input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -107,6 +108,8 @@ struct VTrade
 CTrade   trade;
 bool     gDraw = false;
 int      gObj = 0;
+int      hEmaH4 = INVALID_HANDLE, hEmaD1 = INVALID_HANDLE;
+int      nTrendSkip = 0;
 datetime lastBar = 0;
 bool     warm = false;
 datetime lastSetup = 0;     // open time of the last processed (closed) setup candle
@@ -142,6 +145,8 @@ int      nFiltered = 0, nFallback = 0;
 
 int OnInit()
 {
+   hEmaH4 = iMA(_Symbol, PERIOD_H4, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hEmaD1 = iMA(_Symbol, PERIOD_D1, 50, 0, MODE_EMA, PRICE_CLOSE);
    gDraw = InpDraw && (!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE));
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpDeviation);
@@ -192,8 +197,8 @@ void OnDeinit(const int reason)
    if(nSig > 0)
       PrintFormat("FUNNEL [%s] stop size: avg %.2f  min %.2f  max %.2f | avg spread at signal %.2f",
                   tf, sumStop / nSig, minStop, maxStop, sumSpread / nSig);
-   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f) | stop filter skipped %d | SL mode %d (fallback to NCCLT high %d)",
-               tf, nTrades, nSkip, InpRR, nFiltered, InpSlMode, nFallback);
+   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f) | trend skipped %d | stop filter skipped %d | SL mode %d (fallback to NCCLT high %d)",
+               tf, nTrades, nSkip, InpRR, nTrendSkip, nFiltered, InpSlMode, nFallback);
 }
 
 //+------------------------------------------------------------------+
@@ -368,6 +373,47 @@ double Median(const double &a[])
    ArrayCopy(b, a);
    ArraySort(b);
    return (n % 2 == 1) ? b[n / 2] : 0.5 * (b[n / 2 - 1] + b[n / 2]);
+}
+
+// close of the last closed bar of tf before time t below its EMA50
+bool BelowEma(const ENUM_TIMEFRAMES tf, const int h, const datetime t)
+{
+   int sh = iBarShift(_Symbol, tf, t, false);
+   if(sh < 0) return true;
+   sh += 1;
+   double ema[];
+   if(CopyBuffer(h, 0, sh, 1, ema) != 1) return true;
+   return iClose(_Symbol, tf, sh) < ema[0];
+}
+
+// H4 structure: the last broken H4 swing point (3-candle fractal) was a low
+bool H4StructureDown(const datetime t)
+{
+   int sh = iBarShift(_Symbol, PERIOD_H4, t, false);
+   if(sh < 0) return true;
+   MqlRates b[];
+   ArraySetAsSeries(b, false);
+   int n = CopyRates(_Symbol, PERIOD_H4, sh + 1, 300, b);
+   if(n < 10) return true;
+   double sH = 0, sL = 0;
+   int state = 0;
+   for(int i = 2; i < n; i++)
+   {
+      // the swing at i-1 is confirmed once candle i has closed
+      if(b[i - 1].high > b[i - 2].high && b[i - 1].high > b[i].high) sH = b[i - 1].high;
+      if(b[i - 1].low < b[i - 2].low && b[i - 1].low < b[i].low)     sL = b[i - 1].low;
+      if(sL > 0 && b[i].close < sL) { state = -1; sL = 0; }
+      if(sH > 0 && b[i].close > sH) { state = 1;  sH = 0; }
+   }
+   return state == -1;
+}
+
+bool TrendOk(const datetime t)
+{
+   if(InpTrend == 1) return BelowEma(PERIOD_H4, hEmaH4, t);
+   if(InpTrend == 2) return BelowEma(PERIOD_D1, hEmaD1, t);
+   if(InpTrend == 3) return H4StructureDown(t);
+   return true;
 }
 
 void RemoveBlock(const int i)
@@ -668,6 +714,11 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
             if(live) OnSellSignal(r, b, b.ltL, true);
             else     nLate++;
          }
+      }
+      else if(r.close < b.ltL && InpTrend > 0 && !TrendOk(r.time))
+      {
+         b.stage = 4;          // trend not down at the break: skip this setup
+         nTrendSkip++;
       }
       else if(r.close < b.ltL)
       {
