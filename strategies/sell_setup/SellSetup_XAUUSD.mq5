@@ -40,7 +40,7 @@ input bool   InpNccGreen    = true;   // NCC must be a green candle that retests
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
-input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down
+input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down, 4 H1 close < EMA50, 5 H1 structure down
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -108,7 +108,7 @@ struct VTrade
 CTrade   trade;
 bool     gDraw = false;
 int      gObj = 0;
-int      hEmaH4 = INVALID_HANDLE, hEmaD1 = INVALID_HANDLE;
+int      hEmaH4 = INVALID_HANDLE, hEmaD1 = INVALID_HANDLE, hEmaH1 = INVALID_HANDLE;
 int      nTrendSkip = 0;
 datetime lastBar = 0;
 bool     warm = false;
@@ -147,6 +147,7 @@ int OnInit()
 {
    hEmaH4 = iMA(_Symbol, PERIOD_H4, 50, 0, MODE_EMA, PRICE_CLOSE);
    hEmaD1 = iMA(_Symbol, PERIOD_D1, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hEmaH1 = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
    gDraw = InpDraw && (!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE));
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpDeviation);
@@ -387,13 +388,13 @@ bool BelowEma(const ENUM_TIMEFRAMES tf, const int h, const datetime t)
 }
 
 // H4 structure: the last broken H4 swing point (3-candle fractal) was a low
-bool H4StructureDown(const datetime t)
+bool StructureDown(const ENUM_TIMEFRAMES tf, const datetime t)
 {
-   int sh = iBarShift(_Symbol, PERIOD_H4, t, false);
+   int sh = iBarShift(_Symbol, tf, t, false);
    if(sh < 0) return true;
    MqlRates b[];
    ArraySetAsSeries(b, false);
-   int n = CopyRates(_Symbol, PERIOD_H4, sh + 1, 300, b);
+   int n = CopyRates(_Symbol, tf, sh + 1, 300, b);
    if(n < 10) return true;
    double sH = 0, sL = 0;
    int state = 0;
@@ -412,7 +413,9 @@ bool TrendOk(const datetime t)
 {
    if(InpTrend == 1) return BelowEma(PERIOD_H4, hEmaH4, t);
    if(InpTrend == 2) return BelowEma(PERIOD_D1, hEmaD1, t);
-   if(InpTrend == 3) return H4StructureDown(t);
+   if(InpTrend == 3) return StructureDown(PERIOD_H4, t);
+   if(InpTrend == 4) return BelowEma(PERIOD_H1, hEmaH1, t);
+   if(InpTrend == 5) return StructureDown(PERIOD_H1, t);
    return true;
 }
 
