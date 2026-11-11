@@ -41,6 +41,13 @@ input bool   InpNccShift    = true;   // NCC moves to the next candle if it is g
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down, 4 H1 close < EMA50, 5 H1 structure down
+input group "Checks on the setup (at the break)"
+input double InpSkipStopUnder = 0.0;  // skip if NCCLT range (stop) is below this $ (0 = off)
+input double InpMinOvershoot  = 0.0;  // skip if NCCLT high is less than this $ above the liquidity (0 = off)
+input int    InpNoTradeFrom   = -1;   // skip breaks from this server hour ... (-1 = off)
+input int    InpNoTradeTo     = -1;   // ... up to (not incl.) this server hour
+input double InpSlPad         = 0.0;  // SL = NCCLT high + this $ (wider stop)
+input double InpSlFloor       = 0.0;  // stop at least this $ from the entry (wider stop, 0 = off)
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
 input double InpSlBuf       = 0.30;   // buffer above the liquidity (InpSlMode 1)
@@ -109,7 +116,31 @@ CTrade   trade;
 bool     gDraw = false;
 int      gObj = 0;
 int      hEmaH4 = INVALID_HANDLE, hEmaD1 = INVALID_HANDLE, hEmaH1 = INVALID_HANDLE;
-int      nTrendSkip = 0;
+int      nTrendSkip = 0, nCheckSkip = 0;
+
+// stop used for the setup: NCCLT high, optionally padded or widened to a minimum distance
+double EffSL(const double ltH, const double entry)
+{
+   double sl = ltH + InpSlPad;
+   if(InpSlFloor > 0 && sl - entry < InpSlFloor) sl = entry + InpSlFloor;
+   return sl;
+}
+
+// extra checks at the break; true = skip the setup
+bool CheckSkip(const Block &b, const datetime t)
+{
+   if(InpSkipStopUnder > 0 && b.ltH - b.ltL < InpSkipStopUnder) return true;
+   if(InpMinOvershoot > 0 && b.ltH - b.swH < InpMinOvershoot) return true;
+   if(InpNoTradeFrom >= 0 && InpNoTradeTo >= 0)
+   {
+      MqlDateTime d;
+      TimeToStruct(t, d);
+      bool in = InpNoTradeFrom <= InpNoTradeTo ? (d.hour >= InpNoTradeFrom && d.hour < InpNoTradeTo)
+                                               : (d.hour >= InpNoTradeFrom || d.hour < InpNoTradeTo);
+      if(in) return true;
+   }
+   return false;
+}
 datetime lastBar = 0;
 bool     warm = false;
 datetime lastSetup = 0;     // open time of the last processed (closed) setup candle
@@ -198,8 +229,8 @@ void OnDeinit(const int reason)
    if(nSig > 0)
       PrintFormat("FUNNEL [%s] stop size: avg %.2f  min %.2f  max %.2f | avg spread at signal %.2f",
                   tf, sumStop / nSig, minStop, maxStop, sumSpread / nSig);
-   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f) | trend skipped %d | stop filter skipped %d | SL mode %d (fallback to NCCLT high %d)",
-               tf, nTrades, nSkip, InpRR, nTrendSkip, nFiltered, InpSlMode, nFallback);
+   PrintFormat("FUNNEL [%s] real trades opened=%d skipped=%d (RR %.1f) | trend skipped %d | checks skipped %d | stop filter skipped %d | SL mode %d (fallback to NCCLT high %d)",
+               tf, nTrades, nSkip, InpRR, nTrendSkip, nCheckSkip, nFiltered, InpSlMode, nFallback);
 }
 
 //+------------------------------------------------------------------+
@@ -479,7 +510,7 @@ void OpenSell(const double nccltHigh)
 void OnSellSignal(const MqlRates &r, const Block &b, const double ePx, const bool retest)
 {
    double e = ePx;
-   double sl = b.ltH;
+   double sl = InpRetest ? EffSL(b.ltH, ePx) : b.ltH + InpSlPad;
    if(InpSlMode == 1)
    {
       // stop at the liquidity the NCCLT took, plus a small buffer (if that is above the entry)
@@ -723,13 +754,18 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          b.stage = 4;          // trend not down at the break: skip this setup
          nTrendSkip++;
       }
+      else if(r.close < b.ltL && CheckSkip(b, r.time))
+      {
+         b.stage = 4;
+         nCheckSkip++;
+      }
       else if(r.close < b.ltL)
       {
          if(InpRetest)
          {
             b.brk = true;
             DrawText(r.time, r.low, "break", clrMagenta, ANCHOR_UPPER);
-            if(live) b.tk = PlaceSellLimit(b.ltL, b.ltH);
+            if(live) b.tk = PlaceSellLimit(b.ltL, EffSL(b.ltH, b.ltL));
          }
          else
          {
