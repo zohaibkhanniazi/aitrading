@@ -282,6 +282,7 @@ type Block
     float ncL
     float ncH
     bool  ncRun = false
+    line  lnB      // breaker point, drawn from CC until NCC retests it
     label ncLb
     float swH      // liquidity = highest high of the NCC swing
     float    need
@@ -300,6 +301,7 @@ var array<Block> blocks = array.new<Block>()
 stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     int x = bar_index - off
     if b.stage == 0
+        line.set_x2(b.lnB, x)
         // NCC: first GREEN candle after CC that comes back up and tests the breaking point
         if high[off] >= b.lvl - nccTol and (not nccGreen or close[off] > open[off])
             b.ncBar := x
@@ -398,6 +400,11 @@ if lowerTf and otherBc
               color = cCC, textcolor = color.white, size = size.tiny)
             Block nb = Block.new(lvl = bcLvl, stage = 0, ccBar = bar_index - cc,
               endT = bcEnd)
+            nb.lnB := line.new(bar_index - cc, bcLvl, bar_index - cc + 1, bcLvl,
+              color = #FF6D00, width = 2)
+            label.new(bar_index - cc, bcLvl, "breaker " + str.tostring(bcLvl, format.mintick),
+              style = label.style_label_right, color = color(na), textcolor = #FF6D00,
+              size = size.small)
             if cc >= 2
                 for o = cc - 1 to 1
                     stepBlock(nb, o, trades, stats)
