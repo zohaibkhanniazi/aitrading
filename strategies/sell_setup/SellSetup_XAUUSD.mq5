@@ -27,6 +27,7 @@
 input group "Setup timeframe"
 input ENUM_TIMEFRAMES InpSetupTf = PERIOD_H1; // setup timeframe
 input bool   InpShiftLow    = true;   // breaker level shifts down wick to wick
+input bool   InpCloseAbove  = true;   // pullback valid if the green closes above R's high (wick below R's low allowed)
 input int    InpMaxActive   = 20;     // setups waiting at once (oldest dropped)
 input int    InpWarmup      = 500;    // setup candles read before the first entry candle
 input group "Entry chart (attach to M3 or M5)"
@@ -287,7 +288,9 @@ int SetupCandle(const MqlRates &r, double &hit)
    {
       bool tH = r.high > cH;
       bool tL = r.low < cL;
-      if(tH && !tL && r.close > r.open)
+      // valid: green takes R's high without its low, or closes above R's high
+      // (a wick below R's low is then allowed and the level starts at that wick)
+      if(r.close > r.open && ((tH && !tL) || (InpCloseAbove && r.close > cH)))
       {
          int s = ArraySize(lv);
          ArrayResize(lv, s + 1);
@@ -296,7 +299,7 @@ int SetupCandle(const MqlRates &r, double &hit)
          ArrayResize(lvPT, s + 1);
          ArrayResize(lvSh, s + 1);
          ArrayResize(lvST, s + 1);
-         lv[s] = cL;
+         lv[s] = tL ? r.low : cL;
          lvRT[s] = cT;
          lvRL[s] = cL;
          lvPT[s] = r.time;

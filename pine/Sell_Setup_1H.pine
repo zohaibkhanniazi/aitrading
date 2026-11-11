@@ -49,6 +49,8 @@ swingConf  = input.int(1,
   maxval = 10)
 nccltGreen = input.bool(true, "NCCLT must be a green candle",
   tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
+closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
+  tooltip = "Even if its wick also goes below R's low; the level then starts at that wick")
 retestIn   = input.bool(true, "Entry on retest of the NCCLT low",
   tooltip = "After a candle closes below the NCCLT low, sell when price comes back up to the NCCLT low")
 cCC        = input.color(#2962FF, "CC / NCC colour")
@@ -99,8 +101,10 @@ bcLogic() =>
         if cAct
             bool tH = high > cH
             bool tL = low < cL
-            if tH and not tL and close > open
-                array.push(lv, cL)
+            // valid: green takes R's high without its low, or closes above R's high
+            // (a wick below R's low is then allowed and the level starts at that wick)
+            if close > open and ((tH and not tL) or (closeAbove and close > cH))
+                array.push(lv, tL ? low : cL)
                 if array.size(lv) > maxActive
                     array.shift(lv)
                 cAct := false
@@ -484,7 +488,8 @@ if onSetup
         if cAct
             bool tH = high > cH
             bool tL = low < cL
-            if tH and not tL and close > open
+            if close > open and ((tH and not tL) or (closeAbove and close > cH))
+                float lvl0 = tL ? low : cL
                 box.new(cBar, cH, bar_index, cL, border_color = cSell, border_width = 2,
                   bgcolor = color.new(cSell, 85))
                 label.new(cBar, cL, "R", style = label.style_label_up, color = cSell,
@@ -492,9 +497,9 @@ if onSetup
                 label.new(bar_index, high, close > cH ? "close above" : "sweep",
                   style = label.style_label_down, color = cGreen,
                   textcolor = color.white, size = size.tiny)
-                line ln = line.new(cBar, cL, bar_index, cL, color = color.new(cSell, 20),
+                line ln = line.new(cBar, lvl0, bar_index, lvl0, color = color.new(cSell, 20),
                   style = line.style_dashed, width = 2)
-                array.push(setups, Setup.new(cL, cBar, ln))
+                array.push(setups, Setup.new(lvl0, cBar, ln))
                 if array.size(setups) > maxActive
                     Setup old = array.shift(setups)
                     line.set_color(old.ln, color.new(color.gray, 50))
