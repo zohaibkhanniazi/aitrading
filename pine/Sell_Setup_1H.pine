@@ -50,7 +50,7 @@ swingConf  = input.int(1,
 nccGreen   = input.bool(true, "NCC must be a green candle")
 nccShift   = input.bool(true, "NCC moves to the next candle if it is green and higher")
 nccltRed   = input.bool(true, "NCCLT must be a red candle",
-  tooltip = "If the candle that takes the liquidity is green, NCCLT is the next red candle")
+  tooltip = "If the candle that takes the liquidity is green, NCCLT is the next red candle whose high is above the latest green candle's high")
 wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below ends it)",
   tooltip = "R's low then moves down to that wick")
 closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
@@ -288,6 +288,7 @@ type Block
     float    need
     bool     brk = false
     bool     took = false
+    float    gH        // high of the latest green candle since the liquidity was taken
     int   swBar
     int   conf
     line  lnH
@@ -342,9 +343,18 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         line.set_x2(b.lnL, x)
         // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
         // red, otherwise the next red candle
-        if not b.took and high[off] > b.need and time[off] >= b.endT
+        // a red candle after a green one counts only if its high is above that green's high
+        bool isRed = close[off] < open[off]
+        bool takeNow = not b.took and high[off] > b.need and time[off] >= b.endT
+        bool okLt = false
+        if takeNow
             b.took := true
-        if b.took and (not nccltRed or close[off] < open[off])
+            okLt := not nccltRed or isRed
+        else if b.took
+            okLt := isRed and (na(b.gH) or high[off] > b.gH)
+        if b.took and not okLt and not isRed
+            b.gH := high[off]
+        if okLt
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT,
               textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]

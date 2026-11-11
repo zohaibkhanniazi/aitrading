@@ -83,7 +83,8 @@ struct Block
    bool     ncRun;   // NCC can still move to the next green, higher candle
    double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
    bool     brk;
-   bool     took;    // the liquidity has been taken (waiting for a red candle = NCCLT)     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
+   bool     took;
+   double   gH;      // high of the latest green candle since the liquidity was taken    // the liquidity has been taken (waiting for a red candle = NCCLT)     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
    ulong    tk;      // pending sell limit at the NCCLT low (real trade)
    datetime rT;      // 1H setup behind the BC: R candle, its low, pullback candle,
    double   rL;      //   how often the level shifted (and when last), setups closed below
@@ -632,8 +633,18 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       // NCCLT: first candle after the BC hour that takes the liquidity
       // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
       // red, otherwise the next red candle
-      if(!b.took && r.high > b.need && r.time >= b.endT) b.took = true;
-      if(b.took && (!InpNcclRed || r.close < r.open))
+      // a red candle after a green one counts only if its high is above that green's high
+      bool isRed = r.close < r.open;
+      bool okLt = false;
+      if(!b.took && r.high > b.need && r.time >= b.endT)
+      {
+         b.took = true;
+         okLt = !InpNcclRed || isRed;
+      }
+      else if(b.took)
+         okLt = isRed && r.high > b.gH;
+      if(b.took && !okLt && !isRed) b.gH = r.high;
+      if(okLt)
       {
          b.ltH = r.high;
          b.ltL = r.low;
@@ -726,6 +737,7 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.need = 0;
    b.brk = false;
    b.took = false;
+   b.gH = 0;
    b.tk = 0;
    b.rT = hRT;
    b.rL = hRL;
