@@ -38,7 +38,7 @@ input int    InpNccMax      = 200;    // stop following a BC after this many can
 input int    InpSwingConf   = 1;      // liquidity confirmed after N candles without a higher high
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
-input bool   InpNcclGreen   = true;   // NCCLT must be green; a red candle taking the level raises it to its high
+input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
 input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input group "Stop"
 input int    InpSlMode      = 0;      // 0 = SL at NCCLT high, 1 = SL at liquidity + InpSlBuf
@@ -82,7 +82,8 @@ struct Block
    double   ncH;     // NCC high
    bool     ncRun;   // NCC can still move to the next green, higher candle
    double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
-   bool     brk;     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
+   bool     brk;
+   bool     took;    // the liquidity has been taken (waiting for a red candle = NCCLT)     // a candle closed below the NCCLT low (retest entry: waiting for the retest)
    ulong    tk;      // pending sell limit at the NCCLT low (real trade)
    datetime rT;      // 1H setup behind the BC: R candle, its low, pullback candle,
    double   rL;      //   how often the level shifted (and when last), setups closed below
@@ -629,10 +630,10 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    else if(b.stage == 2)
    {
       // NCCLT: first candle after the BC hour that takes the liquidity
-      // a red candle that takes the level is not NCCLT: its high becomes the level to take
-      if(r.high > b.need && r.time >= b.endT && InpNcclGreen && r.close <= r.open)
-         b.need = r.high;
-      else if(r.high > b.need && r.time >= b.endT)
+      // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
+      // red, otherwise the next red candle
+      if(!b.took && r.high > b.need && r.time >= b.endT) b.took = true;
+      if(b.took && (!InpNcclRed || r.close < r.open))
       {
          b.ltH = r.high;
          b.ltL = r.low;
@@ -724,6 +725,7 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.ncRun = false;
    b.need = 0;
    b.brk = false;
+   b.took = false;
    b.tk = 0;
    b.rT = hRT;
    b.rL = hRL;

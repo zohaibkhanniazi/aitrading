@@ -49,8 +49,8 @@ swingConf  = input.int(1,
   maxval = 10)
 nccGreen   = input.bool(true, "NCC must be a green candle")
 nccShift   = input.bool(true, "NCC moves to the next candle if it is green and higher")
-nccltGreen = input.bool(true, "NCCLT must be a green candle",
-  tooltip = "A red candle that takes the liquidity is skipped and its high becomes the level")
+nccltRed   = input.bool(true, "NCCLT must be a red candle",
+  tooltip = "If the candle that takes the liquidity is green, NCCLT is the next red candle")
 wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below ends it)",
   tooltip = "R's low then moves down to that wick")
 closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
@@ -287,6 +287,7 @@ type Block
     float swH      // liquidity = highest high of the NCC swing
     float    need
     bool     brk = false
+    bool     took = false
     int   swBar
     int   conf
     line  lnH
@@ -339,11 +340,11 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         // NCCLT: first candle after the BC hour that takes the liquidity; lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)
-        // a red candle that takes the liquidity is not NCCLT: its high becomes the level a
-        // green candle has to take
-        if high[off] > b.need and time[off] >= b.endT and nccltGreen and close[off] <= open[off]
-            b.need := high[off]
-        else if high[off] > b.need and time[off] >= b.endT
+        // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
+        // red, otherwise the next red candle
+        if not b.took and high[off] > b.need and time[off] >= b.endT
+            b.took := true
+        if b.took and (not nccltRed or close[off] < open[off])
             label.new(x, high[off], "NCCLT", style = label.style_label_down, color = cLT,
               textcolor = color.white, size = size.tiny)
             b.ltH   := high[off]
