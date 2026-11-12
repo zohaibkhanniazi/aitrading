@@ -144,9 +144,9 @@ bool CheckSkip(const Block &b, const datetime t)
    {
       MqlDateTime d;
       TimeToStruct(t, d);
-      bool in = InpNoTradeFrom <= InpNoTradeTo ? (d.hour >= InpNoTradeFrom && d.hour < InpNoTradeTo)
+      bool inWin = InpNoTradeFrom <= InpNoTradeTo ? (d.hour >= InpNoTradeFrom && d.hour < InpNoTradeTo)
                                                : (d.hour >= InpNoTradeFrom || d.hour < InpNoTradeTo);
-      if(in) return true;
+      if(inWin) return true;
    }
    return false;
 }
