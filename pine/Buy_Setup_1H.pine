@@ -51,6 +51,7 @@ wickKeepR  = input.bool(true, "A wick above R's high keeps R (only a close above
   tooltip = "R's high then moves up to that wick")
 closeAbove = input.bool(true, "Pullback valid if the red closes below R's low",
   tooltip = "Even if its wick also goes above R's high; the level then starts at that wick")
+maxAgeH    = input.int(24, "BC must come within (hours after the R candle, 0 = no limit)", minval = 0)
 ltShift    = input.bool(true, "NCCLT level shifts wick to wick; entry = body close beyond the shifted level")
 ltfShift   = input.bool(true, "Lower chart: breaker also shifts wick to wick; CC = body close beyond it")
 ccNcc      = input.bool(true, "CC is NCC when the retest comes with no opposite candle since CC")
@@ -103,16 +104,23 @@ bcLogic() =>
     var float cH   = na
     var float cL   = na
     var array<float> lv = array.new<float>()
+    var array<int>   lt = array.new<int>()     // R candle time of each level
+    var int   cT   = na
     bool  ins = not na(refH) and qH <= refH and qL >= refL
     int   n   = 0
     float hit = na
     if array.size(lv) > 0
         for i = array.size(lv) - 1 to 0
             float v = array.get(lv, i)
-            if qC < v
+            if maxAgeH > 0 and time - array.get(lt, i) > maxAgeH * 3600000
+                // BC did not come within the allowed time after the R candle: setup dropped
+                array.remove(lv, i)
+                array.remove(lt, i)
+            else if qC < v
                 n += 1
                 hit := na(hit) ? v : math.max(hit, v)
                 array.remove(lv, i)
+                array.remove(lt, i)
             else if shiftLow and qL < v
                 array.set(lv, i, qL)
     if not ins
@@ -127,8 +135,10 @@ bcLogic() =>
             // (a wick below R's low is then allowed and the level starts at that wick)
             if qC > qO and ((tH and not tL) or (closeAbove and qC > cH))
                 array.push(lv, tL ? qL : cL)
+                array.push(lt, cT)
                 if array.size(lv) > maxActive
                     array.shift(lv)
+                    array.shift(lt)
                 cAct := false
             else if tL
                 cAct := false
@@ -136,6 +146,7 @@ bcLogic() =>
             cAct := true
             cH   := qH
             cL   := qL
+            cT   := time
         refH := qH
         refL := qL
     // last CLOSED setup candle (no repainting)
@@ -580,7 +591,11 @@ if onSetup
         for i = array.size(setups) - 1 to 0
             Setup st = array.get(setups, i)
             line.set_x2(st.ln, bar_index)
-            if pC < st.lvl
+            if maxAgeH > 0 and time - time[bar_index - st.rBar] > maxAgeH * 3600000
+                // no BC within the allowed time after the R candle: setup dropped
+                line.set_color(st.ln, color.new(color.gray, 50))
+                array.remove(setups, i)
+            else if pC < st.lvl
                 line.set_color(st.ln, cBuy)
                 line.set_style(st.ln, line.style_solid)
                 nTrig += 1

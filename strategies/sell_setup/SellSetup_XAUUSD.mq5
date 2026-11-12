@@ -39,6 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
+input int    InpMaxAgeH     = 24;     // BC must come within this many hours after the R candle (0 = no limit)
 input bool   InpLtShift     = true;   // NCCLT low shifts wick to wick; entry = body close below the shifted level
 input bool   InpLtfShift    = true;   // entry chart: breaker also shifts wick to wick; CC = body close below it
 input bool   InpCcNcc       = true;   // CC is NCC when the retest comes with no red candle since CC
@@ -124,7 +125,7 @@ CTrade   trade;
 bool     gDraw = false;
 int      gObj = 0;
 int      hEmaH4 = INVALID_HANDLE, hEmaD1 = INVALID_HANDLE, hEmaH1 = INVALID_HANDLE;
-int      nTrendSkip = 0, nCheckSkip = 0;
+int      nTrendSkip = 0, nCheckSkip = 0, nAged = 0;
 
 // stop used for the setup: NCCLT high, optionally padded or widened to a minimum distance
 double EffSL(const double ltH, const double entry)
@@ -310,6 +311,12 @@ int SetupCandle(const MqlRates &r, double &hit)
    hit = 0.0;
    for(int i = ArraySize(lv) - 1; i >= 0; i--)
    {
+      if(InpMaxAgeH > 0 && r.time - lvRT[i] > InpMaxAgeH * 3600)
+      {
+         LvRemove(i);      // no BC within the allowed time after the R candle
+         nAged++;
+         continue;
+      }
       if(r.close < lv[i])
       {
          n++;
