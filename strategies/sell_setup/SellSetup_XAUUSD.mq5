@@ -39,6 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
+input bool   InpCcNcc       = true;   // CC is NCC when the retest comes with no red candle since CC
 input bool   InpLiqNcc      = true;   // liquidity = NCC candle's own high (false = swing of NCC)
 input bool   InpLtInBc      = true;   // NCCLT can form inside the BC candle
 input bool   InpRetest      = false;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
@@ -90,6 +91,9 @@ struct Block
    datetime swT;     // candle of the liquidity high
    double   ncL;     // NCC low
    double   ncH;     // NCC high
+   double   ccH;     // CC high / low (CC is NCC when the retest has no red candle since CC)
+   double   ccL;
+   bool     redSeen;
    bool     ncRun;   // NCC can still move to the next green, higher candle
    double   need;    // level NCCLT must take (liquidity, raised by red candles that took it)
    bool     brk;
@@ -681,6 +685,22 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          nNcc++;
          DrawText(r.time, r.low, "NCC", clrDodgerBlue, ANCHOR_UPPER);
       }
+      else if(InpCcNcc && r.high >= b.lvl - InpNccTol && !b.redSeen)
+      {
+         // retest with no red candle since CC: the breaking candle (CC) is NCC
+         b.ncT = b.ccT;
+         b.ncL = b.ccL;
+         b.ncH = b.ccH;
+         b.ncRun = false;
+         b.swH = b.ccH;
+         b.swT = b.ccT;
+         b.need = b.ccH;
+         b.stage = 2;
+         nNcc++;
+         DrawText(b.ccT, b.ccL, "NCC", clrDodgerBlue, ANCHOR_UPPER);
+      }
+      else if(r.close < r.open)
+         b.redSeen = true;
    }
    else if(b.stage == 1)
    {
@@ -850,6 +870,9 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.nSet = nSetups;
    datetime ccT = lr[cc].time;
    b.ccT = ccT;
+   b.ccH = lr[cc].high;
+   b.ccL = lr[cc].low;
+   b.redSeen = false;
    if(lastClosed > ccT)
    {
       MqlRates cr[];

@@ -51,6 +51,7 @@ wickKeepR  = input.bool(true, "A wick above R's high keeps R (only a close above
   tooltip = "R's high then moves up to that wick")
 closeAbove = input.bool(true, "Pullback valid if the red closes below R's low",
   tooltip = "Even if its wick also goes above R's high; the level then starts at that wick")
+ccNcc      = input.bool(true, "CC is NCC when the retest comes with no opposite candle since CC")
 liqNcc     = input.bool(true, "Liquidity = NCC candle's own level (off = swing of NCC)")
 ltInBc     = input.bool(true, "NCCLT can form inside the BC candle",
   tooltip = "The entry is still only taken after the BC candle has closed")
@@ -292,6 +293,9 @@ type Block
     int   ncBar
     float ncL
     float ncH
+    float ccH
+    float ccL
+    bool  redSeen = false
     bool  ncRun = false
     line  lnB      // breaker point, drawn from CC until NCC retests it
     label ncLb
@@ -328,6 +332,22 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.ncLb  := label.new(x, -pL[off], "NCC", style = label.style_label_down, color = cCC,
               textcolor = color.white, size = size.tiny)
             b.stage := 1
+        else if ccNcc and pH[off] >= b.lvl - nccTol and not b.redSeen
+            // retest with no NCC-colour candle since CC: the breaking candle (CC) is NCC
+            b.ncBar := b.ccBar
+            b.ncL   := b.ccL
+            b.ncH   := b.ccH
+            b.ncRun := false
+            b.swH   := b.ccH
+            b.swBar := b.ccBar
+            b.ncLb  := label.new(b.ccBar, -b.ccL, "NCC", style = label.style_label_down, color = cCC,
+              textcolor = color.white, size = size.tiny)
+            b.lnH   := line.new(b.ccBar, -b.ccH, x, -b.ccH, color = cCC, width = 2)
+            b.lnL   := line.new(b.ccBar, -b.ccL, x, -b.ccL, color = cCC, width = 2)
+            b.need  := b.ccH
+            b.stage := 2
+        else if pC[off] < pO[off]
+            b.redSeen := true
     else if b.stage == 1
         // the next candle green and higher: NCC moves to it (repeats while they keep going up)
         if b.ncRun and nccShift and pC[off] < pO[off] and pH[off] > b.ncH
@@ -434,6 +454,8 @@ if lowerTf and otherBc
               color = cCC, textcolor = color.white, size = size.tiny)
             Block nb = Block.new(lvl = bcLvl, stage = 0, ccBar = bar_index - cc,
               endT = bcEnd)
+            nb.ccH := pH[cc]
+            nb.ccL := pL[cc]
             nb.lnB := line.new(bar_index - cc, -bcLvl, bar_index - cc + 1, -bcLvl,
               color = cBrk, width = 2)
             label.new(bar_index - cc, -bcLvl, "breaker " + str.tostring(-bcLvl, format.mintick),
