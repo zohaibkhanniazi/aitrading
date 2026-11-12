@@ -666,7 +666,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    if(b.stage == 0)
    {
       // NCC: first candle after CC that comes back up and tests the breaker point
-      if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.close > r.open))
+      if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.time < b.endT || r.close > r.open))
       {
          b.swH = r.high;
          b.conf = 0;

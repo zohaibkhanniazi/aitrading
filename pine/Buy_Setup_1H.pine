@@ -43,7 +43,7 @@ nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minv
 swingConf  = input.int(1,
   "Liquidity swing low confirmed after (candles without a lower low)", minval = 1,
   maxval = 10)
-nccGreen   = input.bool(true, "NCC must be a red candle")
+nccGreen   = input.bool(true, "NCC must be a red candle (inside the BC candle any touch counts)")
 nccShift   = input.bool(true, "NCC moves to the next candle if it is red and lower")
 nccltRed   = input.bool(true, "NCCLT must be a green candle",
   tooltip = "If the candle that takes the liquidity is red, NCCLT is the next green candle whose low is below the latest red candle's low")
@@ -312,8 +312,9 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     int x = bar_index - off
     if b.stage == 0
         line.set_x2(b.lnB, x)
-        // NCC: first GREEN candle after CC that comes back up and tests the breaking point
-        if pH[off] >= b.lvl - nccTol and (not nccGreen or pC[off] > pO[off])
+        // NCC: first candle after CC that comes back up and tests the breaking point: inside
+        // the BC candle any colour, after it only a green candle
+        if pH[off] >= b.lvl - nccTol and (not nccGreen or time[off] < b.endT or pC[off] > pO[off])
             b.ncBar := x
             b.ncL   := pL[off]
             b.ncH   := pH[off]
