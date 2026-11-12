@@ -51,6 +51,7 @@ wickKeepR  = input.bool(true, "A wick above R's high keeps R (only a close above
   tooltip = "R's high then moves up to that wick")
 closeAbove = input.bool(true, "Pullback valid if the red closes below R's low",
   tooltip = "Even if its wick also goes above R's high; the level then starts at that wick")
+liqNcc     = input.bool(true, "Liquidity = NCC candle's own level (off = swing of NCC)")
 ltInBc     = input.bool(true, "NCCLT can form inside the BC candle",
   tooltip = "The entry is still only taken after the BC candle has closed")
 retestIn   = input.bool(false, "Entry on retest of the NCCLT high",
@@ -336,8 +337,17 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             label.set_xy(b.ncLb, x, -pL[off])
         else
             b.ncRun := false
+        // liquidity = NCC's own high: the first candle above it is the taker
+        if liqNcc
+            if not b.ncRun
+                b.swH   := b.ncH
+                b.swBar := b.ncBar
+                b.lnH   := line.new(b.swBar, -b.swH, x, -b.swH, color = cCC, width = 2)
+                b.lnL   := line.new(b.ncBar, -b.ncL, x, -b.ncL, color = cCC, width = 2)
+                b.need  := b.swH
+                b.stage := 2
         // NCC swing: keep the highest high until swingConf candle(s) make no higher high
-        if pH[off] > b.swH
+        else if pH[off] > b.swH
             b.swH   := pH[off]
             b.swBar := x
             b.conf  := 0
@@ -348,7 +358,8 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
                 b.lnL   := line.new(b.ncBar, -b.ncL, x, -b.ncL, color = cCC, width = 2)
                 b.need  := b.swH
                 b.stage := 2
-    else if b.stage == 2
+    // (not "else": the candle that fixes NCC can itself take the liquidity)
+    if b.stage == 2
         // NCCLT: first candle after the BC hour that takes the liquidity; lines stop here
         line.set_x2(b.lnH, x)
         line.set_x2(b.lnL, x)

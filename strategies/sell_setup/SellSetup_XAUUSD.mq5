@@ -39,6 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
+input bool   InpLiqNcc      = true;   // liquidity = NCC candle's own high (false = swing of NCC)
 input bool   InpLtInBc      = true;   // NCCLT can form inside the BC candle
 input bool   InpRetest      = false;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down, 4 H1 close < EMA50, 5 H1 structure down
@@ -692,8 +693,19 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       }
       else
          b.ncRun = false;
+      // liquidity = NCC's own high: the first candle above it is the taker
+      if(InpLiqNcc)
+      {
+         if(!b.ncRun)
+         {
+            b.swH = b.ncH;
+            b.swT = b.ncT;
+            b.need = b.swH;
+            b.stage = 2;
+         }
+      }
       // NCC swing: keep the highest high until InpSwingConf candles make no higher high
-      if(r.high > b.swH)
+      else if(r.high > b.swH)
       {
          b.swH = r.high;
          b.swT = r.time;
@@ -709,7 +721,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          }
       }
    }
-   else if(b.stage == 2)
+   if(b.stage == 2)      // not "else": the candle that fixes NCC can itself take the liquidity
    {
       // NCCLT: first candle after the BC hour that takes the liquidity
       // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
