@@ -55,6 +55,7 @@ wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below 
   tooltip = "R's low then moves down to that wick")
 closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
   tooltip = "Even if its wick also goes below R's low; the level then starts at that wick")
+ltfShift   = input.bool(true, "Lower chart: breaker also shifts wick to wick; CC = body close beyond it")
 ccNcc      = input.bool(true, "CC is NCC when the retest comes with no opposite candle since CC")
 liqNcc     = input.bool(true, "Liquidity = NCC candle's own level (off = swing of NCC)")
 ltInBc     = input.bool(true, "NCCLT can form inside the BC candle",
@@ -309,7 +310,22 @@ var array<Block> blocks = array.new<Block>()
 // process the closed candle `off` candles ago for one block
 stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     int x = bar_index - off
-    if b.stage == 0
+    if b.stage == -1
+        // waiting for CC: first body close below the breaker; a wick below moves it down
+        if close[off] < b.lvl
+            b.ccBar := x
+            b.ccH   := high[off]
+            b.ccL   := low[off]
+            label.new(x, high[off], "CC", style = label.style_label_down, color = cCC,
+              textcolor = color.white, size = size.tiny)
+            b.lnB := line.new(x, b.lvl, x + 1, b.lvl, color = #FF6D00, width = 2)
+            label.new(x, b.lvl, "breaker " + str.tostring(b.lvl, format.mintick),
+              style = label.style_label_right, color = color(na), textcolor = #FF6D00,
+              size = size.small)
+            b.stage := 0
+        else if low[off] < b.lvl
+            b.lvl := low[off]
+    else if b.stage == 0
         line.set_x2(b.lnB, x)
         // NCC: first candle after CC that comes back up and tests the breaking point: inside
         // the BC candle any colour, after it only a green candle
@@ -435,22 +451,26 @@ if lowerTf and otherBc
         // CC = oldest candle inside BC that closes (or trades) below R's low
         int ratio = math.max(1, math.round(setupSec / timeframe.in_seconds()))
         int cc = na
+        float lv2 = bcLvl
         for i = math.min(ratio, 400) to 1
             if time[i] >= bcT and time[i] < bcEnd
-                bool brk = ccMode == "Close below" ? close[i] < bcLvl : low[i] < bcLvl
+                bool brk = ccMode == "Close below" ? close[i] < lv2 : low[i] < lv2
                 if brk
                     cc := i
                     break
+                else if ltfShift and low[i] < lv2
+                    // wick below without a body close below: the breaker moves to that wick
+                    lv2 := low[i]
         if not na(cc)
             label.new(bar_index - cc, high[cc], "CC", style = label.style_label_down,
               color = cCC, textcolor = color.white, size = size.tiny)
-            Block nb = Block.new(lvl = bcLvl, stage = 0, ccBar = bar_index - cc,
+            Block nb = Block.new(lvl = lv2, stage = 0, ccBar = bar_index - cc,
               endT = bcEnd)
             nb.ccH := high[cc]
             nb.ccL := low[cc]
-            nb.lnB := line.new(bar_index - cc, bcLvl, bar_index - cc + 1, bcLvl,
+            nb.lnB := line.new(bar_index - cc, lv2, bar_index - cc + 1, lv2,
               color = #FF6D00, width = 2)
-            label.new(bar_index - cc, bcLvl, "breaker " + str.tostring(bcLvl, format.mintick),
+            label.new(bar_index - cc, lv2, "breaker " + str.tostring(lv2, format.mintick),
               style = label.style_label_right, color = color(na), textcolor = #FF6D00,
               size = size.small)
             if cc >= 2
@@ -462,6 +482,12 @@ if lowerTf and otherBc
                 array.push(blocks, nb)
                 if array.size(blocks) > 30
                     array.shift(blocks)
+        else if ltfShift
+            // no body close below the shifted level inside the BC candle: wait for CC
+            array.push(blocks, Block.new(lvl = lv2, stage = -1, ccBar = bar_index - 1,
+              endT = bcEnd))
+            if array.size(blocks) > 30
+                array.shift(blocks)
     if showH and array.size(pbs) > 0
         int k = 0
         for i = 0 to array.size(pbs) - 1

@@ -39,6 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
+input bool   InpLtfShift    = true;   // entry chart: breaker also shifts wick to wick; CC = body close below it
 input bool   InpCcNcc       = true;   // CC is NCC when the retest comes with no red candle since CC
 input bool   InpLiqNcc      = true;   // liquidity = NCC candle's own high (false = swing of NCC)
 input bool   InpLtInBc      = true;   // NCCLT can form inside the BC candle
@@ -669,7 +670,23 @@ void UpdateVirtual(const MqlRates &r)
 void StepBlock(Block &b, const MqlRates &r, const bool live)
 {
    b.since++;
-   if(b.stage == 0)
+   if(b.stage == -1)
+   {
+      // waiting for CC: first body close below the breaker; a wick below moves it down
+      if(r.close < b.lvl)
+      {
+         b.ccT = r.time;
+         b.ccH = r.high;
+         b.ccL = r.low;
+         b.since = 0;
+         b.stage = 0;
+         nCc++;
+         DrawText(r.time, r.high, "CC", clrDodgerBlue, ANCHOR_LOWER);
+      }
+      else if(r.low < b.lvl)
+         b.lvl = r.low;
+   }
+   else if(b.stage == 0)
    {
       // NCC: first candle after CC that comes back up and tests the breaker point
       if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.time < b.endT || r.close < r.open))
@@ -826,11 +843,13 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    ArraySetAsSeries(lr, false);
    int got = CopyRates(_Symbol, _Period, bcT, endT - 1, lr);
    int cc = -1;
+   double lv2 = lvl;
    for(int i = 0; i < got; i++)
    {
       if(lr[i].time < bcT || lr[i].time >= endT) continue;
-      bool brk = InpCcWick ? (lr[i].low < lvl) : (lr[i].close < lvl);
+      bool brk = InpCcWick ? (lr[i].low < lv2) : (lr[i].close < lv2);
       if(brk) { cc = i; break; }
+      if(InpLtfShift && lr[i].low < lv2) lv2 = lr[i].low;   // wick below, no body close: breaker moves down
    }
    if(gDraw)
    {
@@ -838,12 +857,15 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
       DrawText(bcT, h.high, "BC " + TimeToString(bcT, TIME_MINUTES), clrRed, ANCHOR_LEFT_LOWER);
       DrawLine(bcT, lvl, endT, lvl, clrRed, STYLE_DOT, 1);
    }
-   if(cc < 0) { nNoCc++; return; }
-   nCc++;
-   DrawText(lr[cc].time, lr[cc].high, "CC", clrDodgerBlue, ANCHOR_LOWER);
+   if(cc < 0 && (!InpLtfShift || got <= 0)) { nNoCc++; return; }
+   if(cc >= 0)
+   {
+      nCc++;
+      DrawText(lr[cc].time, lr[cc].high, "CC", clrDodgerBlue, ANCHOR_LOWER);
+   }
    Block b;
-   b.lvl = lvl;
-   b.stage = 0;
+   b.lvl = lv2;
+   b.stage = cc >= 0 ? 0 : -1;   // -1 = still waiting for CC after the BC candle
    b.since = 0;
    b.swH = 0;
    b.conf = 0;
@@ -868,10 +890,11 @@ void NewBc(const MqlRates &h, const double lvl, const datetime lastClosed, const
    b.nSh = hSh;
    b.shT = hST;
    b.nSet = nSetups;
-   datetime ccT = lr[cc].time;
+   int ci = cc >= 0 ? cc : got - 1;
+   datetime ccT = lr[ci].time;
    b.ccT = ccT;
-   b.ccH = lr[cc].high;
-   b.ccL = lr[cc].low;
+   b.ccH = lr[ci].high;
+   b.ccL = lr[ci].low;
    b.redSeen = false;
    if(lastClosed > ccT)
    {
