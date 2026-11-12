@@ -666,7 +666,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    if(b.stage == 0)
    {
       // NCC: first candle after CC that comes back up and tests the breaker point
-      if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.time < b.endT || r.close > r.open))
+      if(r.high >= b.lvl - InpNccTol && (!InpNccGreen || r.time < b.endT || r.close < r.open))
       {
          b.swH = r.high;
          b.conf = 0;
@@ -683,7 +683,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
    else if(b.stage == 1)
    {
       // the next candle green and higher: NCC moves to it (repeats while they keep going up)
-      if(b.ncRun && InpNccShift && r.close > r.open && r.high > b.ncH)
+      if(b.ncRun && InpNccShift && r.close < r.open && r.high > b.ncH)
       {
          b.ncT = r.time;
          b.ncL = r.low;
@@ -714,7 +714,7 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
       // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
       // red, otherwise the next red candle
       // a red candle after a green one counts only if its high is above that green's high
-      bool isRed = r.close < r.open;
+      bool isRed = r.close > r.open;   // NCCLT colour: green
       bool okLt = false;
       if(!b.took && r.high > b.need && r.time >= b.endT)
       {

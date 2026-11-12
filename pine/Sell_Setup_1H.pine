@@ -47,10 +47,10 @@ nccMax     = input.int(200, "Stop following a BC after (candles after CC)", minv
 swingConf  = input.int(1,
   "Liquidity swing high confirmed after (candles without a higher high)", minval = 1,
   maxval = 10)
-nccGreen   = input.bool(true, "NCC must be a green candle (inside the BC candle any touch counts)")
-nccShift   = input.bool(true, "NCC moves to the next candle if it is green and higher")
-nccltRed   = input.bool(true, "NCCLT must be a red candle",
-  tooltip = "If the candle that takes the liquidity is green, NCCLT is the next red candle whose high is above the latest green candle's high")
+nccGreen   = input.bool(true, "NCC must be a red candle (inside the BC candle any touch counts)")
+nccShift   = input.bool(true, "NCC moves to the next candle if it is red and higher")
+nccltRed   = input.bool(true, "NCCLT must be a green candle",
+  tooltip = "If the candle that takes the liquidity is red, NCCLT is the next green candle whose high is above the latest red candle's high")
 wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below ends it)",
   tooltip = "R's low then moves down to that wick")
 closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
@@ -306,7 +306,7 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         line.set_x2(b.lnB, x)
         // NCC: first candle after CC that comes back up and tests the breaking point: inside
         // the BC candle any colour, after it only a green candle
-        if high[off] >= b.lvl - nccTol and (not nccGreen or time[off] < b.endT or close[off] > open[off])
+        if high[off] >= b.lvl - nccTol and (not nccGreen or time[off] < b.endT or close[off] < open[off])
             b.ncBar := x
             b.ncL   := low[off]
             b.ncH   := high[off]
@@ -319,7 +319,7 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.stage := 1
     else if b.stage == 1
         // the next candle green and higher: NCC moves to it (repeats while they keep going up)
-        if b.ncRun and nccShift and close[off] > open[off] and high[off] > b.ncH
+        if b.ncRun and nccShift and close[off] < open[off] and high[off] > b.ncH
             b.ncBar := x
             b.ncL   := low[off]
             b.ncH   := high[off]
@@ -345,7 +345,7 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
         // red, otherwise the next red candle
         // a red candle after a green one counts only if its high is above that green's high
-        bool isRed = close[off] < open[off]
+        bool isRed = close[off] > open[off]   // NCCLT colour (sell: green)
         bool takeNow = not b.took and high[off] > b.need and time[off] >= b.endT
         bool okLt = false
         if takeNow
