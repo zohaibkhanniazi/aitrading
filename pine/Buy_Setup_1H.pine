@@ -46,13 +46,13 @@ swingConf  = input.int(1,
 nccGreen   = input.bool(true, "NCC must be a green candle (inside the BC candle any touch counts)")
 nccShift   = input.bool(true, "NCC moves to the next candle if it is green and lower")
 nccltRed   = input.bool(true, "NCCLT must be a red candle",
-  tooltip = "If the candle that takes the liquidity is green, NCCLT is the next red candle whose low is below the latest green candle's low")
+  tooltip = "If the candle that takes the liquidity is green, NCCLT is the first red candle that closes below that green candle's low")
 wickKeepR  = input.bool(true, "A wick above R's high keeps R (only a close above ends it)",
   tooltip = "R's high then moves up to that wick")
 closeAbove = input.bool(true, "Pullback valid if the red closes below R's low",
   tooltip = "Even if its wick also goes above R's high; the level then starts at that wick")
-retestIn   = input.bool(true, "Entry on retest of the NCCLT high",
-  tooltip = "After a candle closes above the NCCLT high, buy when price comes back down to the NCCLT high")
+retestIn   = input.bool(false, "Entry on retest of the NCCLT high",
+  tooltip = "Off: buy at the close of the first candle that closes above the NCCLT high. On: wait for price to come back down to the NCCLT high")
 cCC        = input.color(#6D4C41, "CC / NCC colour")
 cLT        = input.color(#C2185B, "NCCLT colour")
 rrE        = input.float(2.0, "Target (R multiple)", minval = 0.5, step = 0.5,
@@ -360,8 +360,8 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.took := true
             okLt := not nccltRed or isRed
         else if b.took
-            okLt := isRed and (na(b.gH) or pH[off] > b.gH)
-        if b.took and not okLt and not isRed
+            okLt := isRed and (na(b.gH) or pC[off] > b.gH)
+        if b.took and not okLt and not isRed and na(b.gH)
             b.gH := pH[off]
         if okLt
             label.new(x, -pH[off], "NCCLT", style = label.style_label_up, color = cLT,

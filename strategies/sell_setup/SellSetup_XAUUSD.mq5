@@ -39,7 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
-input bool   InpRetest      = true;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
+input bool   InpRetest      = false;   // entry: after a close below the NCCLT low, sell when price retests the NCCLT low
 input int    InpTrend       = 0;      // trend filter at the break: 0 off, 1 H4 close < EMA50, 2 D1 close < EMA50, 3 H4 structure down, 4 H1 close < EMA50, 5 H1 structure down
 input group "Checks on the setup (at the break)"
 input double InpSkipStopUnder = 0.0;  // skip if NCCLT range (stop) is below this $ (0 = off)
@@ -722,8 +722,8 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
          okLt = !InpNcclRed || isRed;
       }
       else if(b.took)
-         okLt = isRed && r.high > b.gH;
-      if(b.took && !okLt && !isRed) b.gH = r.high;
+         okLt = isRed && r.close > b.gH;
+      if(b.took && !okLt && !isRed && b.gH == 0) b.gH = r.high;
       if(okLt)
       {
          b.ltH = r.high;
