@@ -51,6 +51,8 @@ wickKeepR  = input.bool(true, "A wick above R's high keeps R (only a close above
   tooltip = "R's high then moves up to that wick")
 closeAbove = input.bool(true, "Pullback valid if the red closes below R's low",
   tooltip = "Even if its wick also goes above R's high; the level then starts at that wick")
+ltInBc     = input.bool(true, "NCCLT can form inside the BC candle",
+  tooltip = "The entry is still only taken after the BC candle has closed")
 retestIn   = input.bool(false, "Entry on retest of the NCCLT high",
   tooltip = "Off: buy at the close of the first candle that closes above the NCCLT high. On: wait for price to come back down to the NCCLT high")
 cCC        = input.color(#6D4C41, "CC / NCC colour")
@@ -354,7 +356,7 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         // red, otherwise the next red candle
         // a red candle after a green one counts only if its high is above that green's high
         bool isRed = pC[off] > pO[off]   // NCCLT colour (sell: green)
-        bool takeNow = not b.took and pH[off] > b.need and time[off] >= b.endT
+        bool takeNow = not b.took and pH[off] > b.need and (ltInBc or time[off] >= b.endT)
         bool okLt = false
         if takeNow
             b.took := true
@@ -369,7 +371,8 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.ltH   := pH[off]
             b.ltL   := pL[off]
             b.stage := 3
-    else if b.stage == 3
+    else if b.stage == 3 and time[off] >= b.endT
+        // the entry is only taken after the BC candle has closed (BC is confirmed then)
         // SELL: a candle closes below the NCCLT low; with retest entry, sell when a later
         // candle comes back up to the NCCLT low. SL = NCCLT high
         if retestIn and b.brk and pH[off] >= b.ltL
