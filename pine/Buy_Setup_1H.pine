@@ -78,12 +78,9 @@ earlyR     = input.bool(false,
   "Lower chart: green candle may start before the BC candle")
 cH_        = input.color(#FF9800, "h1 / h2 / h3 colour")
 
-// mirrored prices: every rule below is the sell rule on an upside-down chart; everything
-// drawn is flipped back (price -> -price)
-float pO = -open
-float pH = -low
-float pL = -high
-float pC = -close
+// mirrored prices: every rule below is the sell rule on an upside-down chart, written
+// with the built-in prices directly: (-low) = mirrored high, (-high) = mirrored low,
+// (-open), (-close). Everything drawn is flipped back (price -> -price).
 
 int  setupSec = timeframe.in_seconds(setupTf)
 bool onSetup  = timeframe.in_seconds() == setupSec
@@ -94,10 +91,6 @@ bool lowerTf  = timeframe.in_seconds() < setupSec
 // =====================================================================
 bcLogic() =>
     // mirrored prices: the buy setup is the sell setup run on an upside-down chart
-    float qO = -open
-    float qH = -low
-    float qL = -high
-    float qC = -close
     var float refH = na
     var float refL = na
     var bool  cAct = false
@@ -106,7 +99,7 @@ bcLogic() =>
     var array<float> lv = array.new<float>()
     var array<int>   lt = array.new<int>()     // R candle time of each level
     var int   cT   = na
-    bool  ins = not na(refH) and qH <= refH and qL >= refL
+    bool  ins = not na(refH) and (-low) <= refH and (-high) >= refL
     int   n   = 0
     float hit = na
     if array.size(lv) > 0
@@ -116,25 +109,25 @@ bcLogic() =>
                 // BC did not come within the allowed time after the R candle: setup dropped
                 array.remove(lv, i)
                 array.remove(lt, i)
-            else if qC < v
+            else if (-close) < v
                 n += 1
                 hit := na(hit) ? v : math.max(hit, v)
                 array.remove(lv, i)
                 array.remove(lt, i)
-            else if shiftLow and qL < v
-                array.set(lv, i, qL)
+            else if shiftLow and (-high) < v
+                array.set(lv, i, (-high))
     if not ins
         if cAct
-            bool tH = qH > cH
-            bool tL = qL < cL
+            bool tH = (-low) > cH
+            bool tL = (-high) < cL
             // a wick below R's low without a close below keeps R; R's low moves to that wick
-            if wickKeepR and tL and qC >= cL
-                cL := qL
+            if wickKeepR and tL and (-close) >= cL
+                cL := (-high)
                 tL := false
             // valid: green takes R's high without its low, or closes above R's high
             // (a wick below R's low is then allowed and the level starts at that wick)
-            if qC > qO and ((tH and not tL) or (closeAbove and qC > cH))
-                array.push(lv, tL ? qL : cL)
+            if (-close) > (-open) and ((tH and not tL) or (closeAbove and (-close) > cH))
+                array.push(lv, tL ? (-high) : cL)
                 array.push(lt, cT)
                 if array.size(lv) > maxActive
                     array.shift(lv)
@@ -142,15 +135,15 @@ bcLogic() =>
                 cAct := false
             else if tL
                 cAct := false
-        if qC < qO
+        if (-close) < (-open)
             cAct := true
-            cH   := qH
-            cL   := qL
+            cH   := (-low)
+            cL   := (-high)
             cT   := time
-        refH := qH
-        refL := qL
+        refH := (-low)
+        refL := (-high)
     // last CLOSED setup candle (no repainting)
-    [n[1], qH[1], qL[1], time[1], hit[1]]
+    [n[1], (-low[1]), (-high[1]), time[1], hit[1]]
 
 [bcN, bcH, bcL, bcT, bcLvl] = request.security(syminfo.tickerid, setupTf, bcLogic(),
   lookahead = barmerge.lookahead_on)
@@ -173,26 +166,26 @@ var float l3H    = na
 var float l3L    = na
 var int   l3Bar  = na
 var int   l3Time = na
-bool l3Inside = not na(l3RefH) and pH <= l3RefH and pL >= l3RefL
+bool l3Inside = not na(l3RefH) and (-low) <= l3RefH and (-high) >= l3RefL
 if lowerTf and not l3Inside
     if l3Act
-        bool tH3 = pH > l3H
-        bool tL3 = pL < l3L
-        if tH3 and not tL3 and pC > pO
-            array.push(pbs, PB.new(bar_index, time, pH, l3Bar, l3Time))
+        bool tH3 = (-low) > l3H
+        bool tL3 = (-high) < l3L
+        if tH3 and not tL3 and (-close) > (-open)
+            array.push(pbs, PB.new(bar_index, time, (-low), l3Bar, l3Time))
             if array.size(pbs) > 400
                 array.shift(pbs)
             l3Act := false
         else if tL3
             l3Act := false
-    if pC < pO
+    if (-close) < (-open)
         l3Act  := true
-        l3H    := pH
-        l3L    := pL
+        l3H    := (-low)
+        l3L    := (-high)
         l3Bar  := bar_index
         l3Time := time
-    l3RefH := pH
-    l3RefL := pL
+    l3RefH := (-low)
+    l3RefL := (-high)
 
 // ---------------------------------------------------------------- trades (lower chart)
 // every SELL is also scored for 1R / 1.5R / 2R / 2.5R / 3R (same entries and stops)
@@ -237,7 +230,7 @@ openTradeAt(array<Trade> ts, Stats st, int off, float sl, float ePrice) =>
     line ls = line.new(x, -sl, x + 1, -sl, color = color.new(#F23645, 0), width = 2)
     line lt = line.new(x, -tp, x + 1, -tp, color = color.new(#089981, 0), width = 2)
     // entry candle that also reaches the stop: scanned too (stop first = loss)
-    int chk0 = pH[off] >= sl and e != pC[off] ? x - 1 : x
+    int chk0 = (-low[off]) >= sl and e != (-close[off]) ? x - 1 : x
     array.push(ts, Trade.new(e, sl, tp, x, chk0, le, ls, lt, lb, false, array.new_int(5, 0)))
     st.trades := st.trades + 1
     alert("BUY " + syminfo.ticker + "  entry " + str.tostring(-e,
@@ -255,10 +248,10 @@ updateTrades(array<Trade> ts, Stats st) =>
             int first = bar_index - 1 - t.chk
             if first >= 1
                 for o = math.min(first, 400) to 1
-                    bool hitSl = pH[o] >= t.sl
+                    bool hitSl = (-low[o]) >= t.sl
                     // the trade drawn on the chart (target = rrE)
                     if not t.mainDone
-                        bool hitTp = pL[o] <= t.tp
+                        bool hitTp = (-high[o]) <= t.tp
                         if hitSl or hitTp
                             bool win = hitTp and not hitSl
                             st.netR := st.netR + (win ? rrE : -1.0)
@@ -281,7 +274,7 @@ updateTrades(array<Trade> ts, Stats st) =>
                             if hitSl
                                 array.set(t.res, k, -1)
                                 array.set(st.rl, k, array.get(st.rl, k) + 1)
-                            else if pL[o] <= tpk
+                            else if (-high[o]) <= tpk
                                 array.set(t.res, k, 1)
                                 array.set(st.rw, k, array.get(st.rw, k) + 1)
                     if t.mainDone and not array.includes(t.res, 0)
@@ -332,35 +325,35 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
     int x = bar_index - off
     if b.stage == -1
         // waiting for CC: first body close below the breaker; a wick below moves it down
-        if pC[off] < b.lvl
+        if (-close[off]) < b.lvl
             b.ccBar := x
-            b.ccH   := pH[off]
-            b.ccL   := pL[off]
-            label.new(x, -pH[off], "CC", style = label.style_label_up, color = cCC,
+            b.ccH   := (-low[off])
+            b.ccL   := (-high[off])
+            label.new(x, -(-low[off]), "CC", style = label.style_label_up, color = cCC,
               textcolor = color.white, size = size.tiny)
             b.lnB := line.new(x, -b.lvl, x + 1, -b.lvl, color = cBrk, width = 2)
             label.new(x, -b.lvl, "breaker " + str.tostring(-b.lvl, format.mintick),
               style = label.style_label_right, color = color(na), textcolor = cBrk,
               size = size.small)
             b.stage := 0
-        else if pL[off] < b.lvl
-            b.lvl := pL[off]
+        else if (-high[off]) < b.lvl
+            b.lvl := (-high[off])
     else if b.stage == 0
         line.set_x2(b.lnB, x)
         // NCC: first candle after CC that comes back up and tests the breaking point: inside
         // the BC candle any colour, after it only a green candle
-        if pH[off] >= b.lvl - nccTol and (not nccGreen or time[off] < b.endT or pC[off] < pO[off])
+        if (-low[off]) >= b.lvl - nccTol and (not nccGreen or time[off] < b.endT or (-close[off]) < (-open[off]))
             b.ncBar := x
-            b.ncL   := pL[off]
-            b.ncH   := pH[off]
+            b.ncL   := (-high[off])
+            b.ncH   := (-low[off])
             b.ncRun := true
-            b.swH   := pH[off]
+            b.swH   := (-low[off])
             b.swBar := x
             b.conf  := 0
-            b.ncLb  := label.new(x, -pL[off], "NCC", style = label.style_label_down, color = cCC,
+            b.ncLb  := label.new(x, -(-high[off]), "NCC", style = label.style_label_down, color = cCC,
               textcolor = color.white, size = size.tiny)
             b.stage := 1
-        else if ccNcc and pH[off] >= b.lvl - nccTol and not b.redSeen
+        else if ccNcc and (-low[off]) >= b.lvl - nccTol and not b.redSeen
             // retest with no NCC-colour candle since CC: the breaking candle (CC) is NCC
             b.ncBar := b.ccBar
             b.ncL   := b.ccL
@@ -374,15 +367,15 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             b.lnL   := line.new(b.ccBar, -b.ccL, x, -b.ccL, color = cCC, width = 2)
             b.need  := b.ccH
             b.stage := 2
-        else if pC[off] < pO[off]
+        else if (-close[off]) < (-open[off])
             b.redSeen := true
     else if b.stage == 1
         // the next candle green and higher: NCC moves to it (repeats while they keep going up)
-        if b.ncRun and nccShift and pC[off] < pO[off] and pH[off] > b.ncH
+        if b.ncRun and nccShift and (-close[off]) < (-open[off]) and (-low[off]) > b.ncH
             b.ncBar := x
-            b.ncL   := pL[off]
-            b.ncH   := pH[off]
-            label.set_xy(b.ncLb, x, -pL[off])
+            b.ncL   := (-high[off])
+            b.ncH   := (-low[off])
+            label.set_xy(b.ncLb, x, -(-high[off]))
         else
             b.ncRun := false
         // liquidity = NCC's own high: the first candle above it is the taker
@@ -395,8 +388,8 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
                 b.need  := b.swH
                 b.stage := 2
         // NCC swing: keep the highest high until swingConf candle(s) make no higher high
-        else if pH[off] > b.swH
-            b.swH   := pH[off]
+        else if (-low[off]) > b.swH
+            b.swH   := (-low[off])
             b.swBar := x
             b.conf  := 0
         else
@@ -414,40 +407,40 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
         // the liquidity is taken by a candle after the BC hour; NCCLT = that candle if it is
         // red, otherwise the next red candle
         // a red candle after a green one counts only if its high is above that green's high
-        bool isRed = pC[off] > pO[off]   // NCCLT colour (sell: green)
-        bool takeNow = not b.took and pH[off] > b.need and (ltInBc or time[off] >= b.endT)
+        bool isRed = (-close[off]) > (-open[off])   // NCCLT colour (sell: green)
+        bool takeNow = not b.took and (-low[off]) > b.need and (ltInBc or time[off] >= b.endT)
         bool okLt = false
         if takeNow
             b.took := true
             okLt := not nccltRed or isRed
         else if b.took
-            okLt := isRed and (na(b.gH) or pC[off] > b.gH)
+            okLt := isRed and (na(b.gH) or (-close[off]) > b.gH)
         if b.took and not okLt and not isRed and na(b.gH)
-            b.gH := pH[off]
+            b.gH := (-low[off])
         if okLt
-            label.new(x, -pH[off], "NCCLT", style = label.style_label_up, color = cLT,
+            label.new(x, -(-low[off]), "NCCLT", style = label.style_label_up, color = cLT,
               textcolor = color.white, size = size.tiny)
-            b.ltH   := pH[off]
-            b.ltL   := pL[off]
+            b.ltH   := (-low[off])
+            b.ltL   := (-high[off])
             b.stage := 3
     else if b.stage == 3 and time[off] >= b.endT
         // the entry is only taken after the BC candle has closed (BC is confirmed then)
         // SELL: a candle closes below the NCCLT low; with retest entry, sell when a later
         // candle comes back up to the NCCLT low. SL = NCCLT high
-        if retestIn and b.brk and pH[off] >= b.ltL
+        if retestIn and b.brk and (-low[off]) >= b.ltL
             openTradeAt(ts, st, off, b.ltH, b.ltL)
             b.stage := 4
-        else if pC[off] < b.ltL and not b.brk
+        else if (-close[off]) < b.ltL and not b.brk
             if retestIn
                 b.brk := true
-                label.new(x, -pL[off], "break", style = label.style_label_down, color = color(na),
+                label.new(x, -(-high[off]), "break", style = label.style_label_down, color = color(na),
                   textcolor = cLT, size = size.tiny)
             else
-                openTradeAt(ts, st, off, b.ltH, pC[off])
+                openTradeAt(ts, st, off, b.ltH, (-close[off]))
                 b.stage := 4
-        else if ltShift and not b.brk and pL[off] < b.ltL
+        else if ltShift and not b.brk and (-high[off]) < b.ltL
             // wick beyond the NCCLT level without a body close: the entry level moves to that wick
-            b.ltL := pL[off]
+            b.ltL := (-high[off])
     if b.stage < 4 and x - b.ccBar > nccMax
         b.stage := 4
     true
@@ -477,20 +470,20 @@ if lowerTf and otherBc
         float lv2 = bcLvl
         for i = math.min(ratio, 400) to 1
             if time[i] >= bcT and time[i] < bcEnd
-                bool brk = ccMode == "Close below" ? pC[i] < lv2 : pL[i] < lv2
+                bool brk = ccMode == "Close below" ? (-close[i]) < lv2 : (-high[i]) < lv2
                 if brk
                     cc := i
                     break
-                else if ltfShift and pL[i] < lv2
+                else if ltfShift and (-high[i]) < lv2
                     // wick below without a body close below: the breaker moves to that wick
-                    lv2 := pL[i]
+                    lv2 := (-high[i])
         if not na(cc)
-            label.new(bar_index - cc, -pH[cc], "CC", style = label.style_label_up,
+            label.new(bar_index - cc, -(-low[cc]), "CC", style = label.style_label_up,
               color = cCC, textcolor = color.white, size = size.tiny)
             Block nb = Block.new(lvl = lv2, stage = 0, ccBar = bar_index - cc,
               endT = bcEnd)
-            nb.ccH := pH[cc]
-            nb.ccL := pL[cc]
+            nb.ccH := (-low[cc])
+            nb.ccL := (-high[cc])
             nb.lnB := line.new(bar_index - cc, -lv2, bar_index - cc + 1, -lv2,
               color = cBrk, width = 2)
             label.new(bar_index - cc, -lv2, "breaker " + str.tostring(-lv2, format.mintick),
@@ -581,7 +574,7 @@ var bool  cAct = false
 var float cH   = na
 var float cL   = na
 var int   cBar = na
-bool inside = not na(refH) and pH <= refH and pL >= refL
+bool inside = not na(refH) and (-low) <= refH and (-high) >= refL
 bool bcNow  = false
 
 if onSetup
@@ -595,39 +588,39 @@ if onSetup
                 // no BC within the allowed time after the R candle: setup dropped
                 line.set_color(st.ln, color.new(color.gray, 50))
                 array.remove(setups, i)
-            else if pC < st.lvl
+            else if (-close) < st.lvl
                 line.set_color(st.ln, cBuy)
                 line.set_style(st.ln, line.style_solid)
                 nTrig += 1
                 array.remove(setups, i)
-            else if shiftLow and pL < st.lvl
+            else if shiftLow and (-high) < st.lvl
                 // wick below without a close below: the level moves down to this wick
-                st.lvl := pL
-                st.ln  := line.new(bar_index, -pL, bar_index, -pL,
+                st.lvl := (-high)
+                st.ln  := line.new(bar_index, -(-high), bar_index, -(-high),
                   color = color.new(cBuy, 20), style = line.style_dashed, width = 2)
-                label.new(bar_index, -pL, "shift", style = label.style_label_down,
+                label.new(bar_index, -(-high), "shift", style = label.style_label_down,
                   color = color(na), textcolor = cBuy, size = size.tiny)
     if nTrig > 0
         bcNow := true
-        label.new(bar_index, -pH,
+        label.new(bar_index, -(-low),
           nTrig > 1 ? "BC (" + str.tostring(nTrig) + " setups)" : "BC",
           style = label.style_label_up, color = cBuy, textcolor = color.white,
           size = size.small)
     // 2. the pattern is built only from independent candles
     if not inside
         if cAct
-            bool tH = pH > cH
-            bool tL = pL < cL
-            if wickKeepR and tL and pC >= cL
-                cL := pL
+            bool tH = (-low) > cH
+            bool tL = (-high) < cL
+            if wickKeepR and tL and (-close) >= cL
+                cL := (-high)
                 tL := false
-            if pC > pO and ((tH and not tL) or (closeAbove and pC > cH))
-                float lvl0 = tL ? pL : cL
+            if (-close) > (-open) and ((tH and not tL) or (closeAbove and (-close) > cH))
+                float lvl0 = tL ? (-high) : cL
                 box.new(cBar, -cL, bar_index, -cH, border_color = cBuy, border_width = 2,
                   bgcolor = color.new(cBuy, 85))
                 label.new(cBar, -cL, "R", style = label.style_label_down, color = cBuy,
                   textcolor = color.white, size = size.small)
-                label.new(bar_index, -pH, pC > cH ? "close below" : "sweep",
+                label.new(bar_index, -(-low), (-close) > cH ? "close below" : "sweep",
                   style = label.style_label_up, color = cGreen,
                   textcolor = color.white, size = size.tiny)
                 line ln = line.new(cBar, -lvl0, bar_index, -lvl0, color = color.new(cBuy, 20),
@@ -639,13 +632,13 @@ if onSetup
                 cAct := false
             else if tL
                 cAct := false
-        if pC < pO
+        if (-close) < (-open)
             cAct := true
-            cH   := pH
-            cL   := pL
+            cH   := (-low)
+            cL   := (-high)
             cBar := bar_index
-        refH := pH
-        refL := pL
+        refH := (-low)
+        refL := (-high)
 
 barcolor(onSetup and greyInside and inside ? color.new(color.gray, 30) : na)
 plotshape(bcNow, "BC", shape.triangleup, location.belowbar, cBuy, size = size.tiny)
