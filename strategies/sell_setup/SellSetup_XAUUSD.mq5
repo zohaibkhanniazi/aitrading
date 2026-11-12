@@ -39,6 +39,7 @@ input int    InpSwingConf   = 1;      // liquidity confirmed after N candles wit
 input bool   InpNccGreen    = true;   // NCC must be a green candle that retests the breaking point
 input bool   InpNccShift    = true;   // NCC moves to the next candle if it is green and higher
 input bool   InpNcclRed     = true;   // NCCLT must be red: if the liquidity taker is green, NCCLT = the next red candle
+input bool   InpLtShift     = true;   // NCCLT low shifts wick to wick; entry = body close below the shifted level
 input bool   InpLtfShift    = true;   // entry chart: breaker also shifts wick to wick; CC = body close below it
 input bool   InpCcNcc       = true;   // CC is NCC when the retest comes with no red candle since CC
 input bool   InpLiqNcc      = true;   // liquidity = NCC candle's own high (false = swing of NCC)
@@ -824,6 +825,8 @@ void StepBlock(Block &b, const MqlRates &r, const bool live)
             else     nLate++;
          }
       }
+      else if(InpLtShift && !b.brk && r.low < b.ltL)
+         b.ltL = r.low;      // wick below the NCCLT low without a body close: entry level moves down
    }
    if(b.stage < 4 && b.since > InpNccMax)
    {

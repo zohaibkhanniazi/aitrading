@@ -55,6 +55,7 @@ wickKeepR  = input.bool(true, "A wick below R's low keeps R (only a close below 
   tooltip = "R's low then moves down to that wick")
 closeAbove = input.bool(true, "Pullback valid if the green closes above R's high",
   tooltip = "Even if its wick also goes below R's low; the level then starts at that wick")
+ltShift    = input.bool(true, "NCCLT level shifts wick to wick; entry = body close beyond the shifted level")
 ltfShift   = input.bool(true, "Lower chart: breaker also shifts wick to wick; CC = body close beyond it")
 ccNcc      = input.bool(true, "CC is NCC when the retest comes with no opposite candle since CC")
 liqNcc     = input.bool(true, "Liquidity = NCC candle's own level (off = swing of NCC)")
@@ -425,6 +426,9 @@ stepBlock(Block b, int off, array<Trade> ts, Stats st) =>
             else
                 openTradeAt(ts, st, off, b.ltH, close[off])
                 b.stage := 4
+        else if ltShift and not b.brk and low[off] < b.ltL
+            // wick beyond the NCCLT level without a body close: the entry level moves to that wick
+            b.ltL := low[off]
     if b.stage < 4 and x - b.ccBar > nccMax
         b.stage := 4
     true
